@@ -36,6 +36,19 @@ def _gemini_response_schema() -> dict[str, Any]:
                 sanitize(value)
 
     sanitize(schema)
+
+    # These fields belong to the skill contract, not to Gemini. Asking the
+    # model to reproduce fixed metadata wastes output tokens and can still
+    # produce a contract-invalid value (for example, "1.0" for schema_version).
+    # Remove them from the transport schema and inject the authoritative values
+    # after the model response is parsed.
+    properties = schema.get("properties", {})
+    required = schema.get("required", [])
+    for field in ("schema_version", "analysis_type", "duration_seconds"):
+        properties.pop(field, None)
+        if field in required:
+            required.remove(field)
+
     return schema
 
 
@@ -107,4 +120,11 @@ class GeminiSemanticProvider:
             raise RuntimeError("Gemini returned an empty semantic response")
 
         payload = json.loads(output_text)
+
+        # Contract-owned fields are authoritative locally; Gemini does not
+        # need to spend output tokens generating them.
+        payload["schema_version"] = "0.1"
+        payload["analysis_type"] = "semantic"
+        payload["duration_seconds"] = duration_seconds
+
         return SemanticAnalysis.model_validate(payload)
