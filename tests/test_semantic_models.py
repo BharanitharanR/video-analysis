@@ -3,6 +3,7 @@ from pydantic import ValidationError
 
 from video_analysis.semantic.models import SemanticAnalysis
 from video_analysis.semantic.merge import merge_semantic_analysis
+from video_analysis.semantic.gemini import _gemini_response_schema
 
 
 def valid_semantic():
@@ -63,3 +64,20 @@ def test_merge_preserves_deterministic_dimensions():
     assert merged["video"]["dimensions"]["quality"]["sharpness"]["median"] == 12
     assert merged["video"]["dimensions"]["semantic"]["overall_mood"] == "curious"
     assert "semantic" not in deterministic["video"]["dimensions"]
+
+
+def test_gemini_schema_omits_incompatible_constraints():
+    schema = _gemini_response_schema()
+
+    def walk(node):
+        if isinstance(node, dict):
+            yield node
+            for value in node.values():
+                yield from walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                yield from walk(value)
+
+    nodes = list(walk(schema))
+    assert all("exclusiveMinimum" not in node for node in nodes)
+    assert all("maxItems" not in node for node in nodes)
