@@ -6,6 +6,7 @@ import copy
 import json
 import mimetypes
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,8 @@ from .models import SemanticAnalysis
 from .prompt import SYSTEM_INSTRUCTION, build_semantic_prompt
 
 MAX_INLINE_VIDEO_BYTES = 20 * 1024 * 1024
+DEFAULT_FILE_POLL_INTERVAL_SECONDS = 2.0
+DEFAULT_FILE_PROCESSING_TIMEOUT_SECONDS = 300.0
 DEFAULT_RAW_RESPONSE_LOG = "gemini-response.raw.json"
 
 
@@ -52,6 +55,13 @@ def _gemini_response_schema() -> dict[str, Any]:
     return schema
 
 
+def _file_state_name(file: Any) -> str:
+    """Return a normalized Gemini Files API state name."""
+    state = getattr(file, "state", None)
+    name = getattr(state, "name", state)
+    return str(name).upper()
+
+
 class GeminiSemanticProvider:
     """Generate a separate SemanticAnalysis JSON document with Gemini.
 
@@ -59,12 +69,18 @@ class GeminiSemanticProvider:
     Set GEMINI_API_KEY in the environment. The API key is never accepted in
     source code or logged by this class.
 
-    The provider uses the Gemini Interactions API because it supports the
-    multimodal video input and structured JSON response format used by this
-    skill.
+    Small videos are sent inline. Larger videos are uploaded through the
+    Gemini Files API and referenced by URI, so the provider can handle normal
+    phone-camera files without requiring the caller to transcode them first.
     """
 
-    def __init__(self, model: str = "gemini-4-hydrogen") -> None:
+    def __init__(
+        self,
+        model: str = "gemini-4-hydrogen",
+        *,
+        file_poll_interval_seconds: float = DEFAULT_FILE_POLL_INTERVAL_SECONDS,
+        file_processing_timeout_seconds: float = DEFAULT_FILE_PROCESSING_TIMEOUT_SECONDS,
+    ) -> None:
         try:
             from google import genai
         except ImportError as exc:
@@ -73,6 +89,37 @@ class GeminiSemanticProvider:
             ) from exc
         self._client = genai.Client()
         self.model = model
+        self.file_poll_interval_seconds = file_poll_interval_seconds
+        self.file_processing_timeout_seconds = file_processing_timeout_seconds
+
+    def _upload_video(self, path: Path) -> Any:
+        """Upload a large video and wait until Gemini has processed it."""
+        uploaded_file = self._client.files.upload(file=str(path))
+        deadline = time.monotonic() + self.file_processing_timeout_seconds
+
+        while True:
+            state = _file_state_name(uploaded_file)
+            if state == "ACTIVE":
+                return uploaded_file
+            if state in {"FAILED", "ERROR"}:
+                raise RuntimeError(
+                    f"Gemini Files API failed to process video {path}: "
+                    f"state={state}"
+                )
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"Gemini Files API did not make video active within "
+                    f"{self.file_processing_timeout_seconds:.0f} seconds; "
+                    f"last state={state}"
+                )
+
+            time.sleep(self.file_poll_interval_seconds)
+            file_name = getattr(uploaded_file, "name", None)
+            if not file_name:
+                raise RuntimeError(
+                    "Gemini Files API upload response did not include a file name."
+                )
+            uploaded_file = self._client.files.get(name=file_name)
 
     def analyze(
         self,
@@ -84,26 +131,36 @@ class GeminiSemanticProvider:
         if not path.is_file():
             raise FileNotFoundError(path)
 
-        video_bytes = path.read_bytes()
-        if len(video_bytes) > MAX_INLINE_VIDEO_BYTES:
-            raise ValueError(
-                f"Video is {len(video_bytes) / (1024 * 1024):.1f} MiB, exceeding "
-                f"the {MAX_INLINE_VIDEO_BYTES / (1024 * 1024):.0f} MiB inline-video limit. "
-                "Use a smaller video or add a Files API URI transport."
-            )
-
+        file_size = path.stat().st_size
         mime_type = mimetypes.guess_type(path.name)[0] or "video/mp4"
+
+        if file_size <= MAX_INLINE_VIDEO_BYTES:
+            video_bytes = path.read_bytes()
+            video_input = {
+                "type": "video",
+                "data": base64.b64encode(video_bytes).decode("utf-8"),
+                "mime_type": mime_type,
+            }
+        else:
+            uploaded_file = self._upload_video(path)
+            file_uri = getattr(uploaded_file, "uri", None)
+            if not file_uri:
+                raise RuntimeError(
+                    "Gemini Files API upload did not return a file URI."
+                )
+            video_input = {
+                "type": "video",
+                "uri": file_uri,
+                "mime_type": getattr(uploaded_file, "mime_type", None) or mime_type,
+            }
+
         prompt = build_semantic_prompt(duration_seconds, evidence)
         schema = _gemini_response_schema()
 
         interaction = self._client.interactions.create(
             model=self.model,
             input=[
-                {
-                    "type": "video",
-                    "data": base64.b64encode(video_bytes).decode("utf-8"),
-                    "mime_type": mime_type,
-                },
+                video_input,
                 {"type": "text", "text": prompt},
             ],
             system_instruction=SYSTEM_INSTRUCTION,

@@ -52,6 +52,15 @@ video-analysis analyze IMG_0771.mov --semantic gemini --gemini-model gemini-4-hy
 
 Without `--semantic`, the CLI remains deterministic-only.
 
+## Large video transport
+
+Gemini video input uses two transports automatically:
+
+- Videos up to 20 MiB are sent inline.
+- Larger videos are uploaded through the Gemini Files API, polled until the file is `ACTIVE`, and then referenced by URI.
+
+This means normal phone-camera videos can be analyzed without the caller first transcoding them just to satisfy the inline request limit.
+
 ## Semantic analysis
 
 ```python

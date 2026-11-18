@@ -1,9 +1,12 @@
+import json
+
 import pytest
 from pydantic import ValidationError
 
 from video_analysis.semantic.models import SemanticAnalysis
 from video_analysis.semantic.merge import merge_semantic_analysis
-from video_analysis.semantic.gemini import _gemini_response_schema
+from video_analysis.semantic import gemini
+from video_analysis.semantic.gemini import GeminiSemanticProvider, _gemini_response_schema
 
 
 def valid_semantic():
@@ -102,3 +105,106 @@ def test_gemini_schema_excludes_contract_owned_fields():
     assert "schema_version" not in required
     assert "analysis_type" not in required
     assert "duration_seconds" not in required
+
+
+def test_gemini_large_video_uses_files_api_uri(monkeypatch, tmp_path):
+    video = tmp_path / "large.mov"
+    video.write_bytes(b"video-bytes")
+
+    class FakeFile:
+        def __init__(self, state, uri=None):
+            self.state = state
+            self.name = "files/test-video"
+            self.uri = uri
+            self.mime_type = "video/quicktime"
+
+    class FakeInteraction:
+        output_text = json.dumps(valid_semantic())
+
+    class FakeFiles:
+        def __init__(self):
+            self.uploaded = []
+            self.get_calls = 0
+
+        def upload(self, file):
+            self.uploaded.append(file)
+            return FakeFile("PROCESSING")
+
+        def get(self, name):
+            self.get_calls += 1
+            return FakeFile("ACTIVE", "https://generativelanguage.googleapis.com/v1beta/files/test-video")
+
+    class FakeInteractions:
+        def __init__(self):
+            self.calls = []
+
+        def create(self, **kwargs):
+            self.calls.append(kwargs)
+            return FakeInteraction()
+
+    class FakeClient:
+        def __init__(self):
+            self.files = FakeFiles()
+            self.interactions = FakeInteractions()
+
+    provider = object.__new__(GeminiSemanticProvider)
+    provider._client = FakeClient()
+    provider.model = "gemini-test"
+    provider.file_poll_interval_seconds = 0
+    provider.file_processing_timeout_seconds = 1
+
+    monkeypatch.setattr(gemini, "MAX_INLINE_VIDEO_BYTES", 1)
+
+    result = provider.analyze(video, duration_seconds=5.0)
+
+    assert result.analysis_type == "semantic"
+    assert provider._client.files.uploaded == [str(video)]
+    assert provider._client.files.get_calls == 1
+
+    video_input = provider._client.interactions.calls[0]["input"][0]
+    assert video_input["type"] == "video"
+    assert video_input["uri"].endswith("/files/test-video")
+    assert video_input["mime_type"] == "video/quicktime"
+    assert "data" not in video_input
+
+
+def test_gemini_small_video_stays_inline(monkeypatch, tmp_path):
+    video = tmp_path / "small.mp4"
+    video.write_bytes(b"small-video")
+
+    class FakeInteraction:
+        output_text = json.dumps(valid_semantic())
+
+    class FakeFiles:
+        def upload(self, file):
+            raise AssertionError("small videos should not use Files API")
+
+    class FakeInteractions:
+        def __init__(self):
+            self.calls = []
+
+        def create(self, **kwargs):
+            self.calls.append(kwargs)
+            return FakeInteraction()
+
+    class FakeClient:
+        def __init__(self):
+            self.files = FakeFiles()
+            self.interactions = FakeInteractions()
+
+    provider = object.__new__(GeminiSemanticProvider)
+    provider._client = FakeClient()
+    provider.model = "gemini-test"
+    provider.file_poll_interval_seconds = 0
+    provider.file_processing_timeout_seconds = 1
+
+    monkeypatch.setattr(gemini, "MAX_INLINE_VIDEO_BYTES", 1024)
+
+    result = provider.analyze(video, duration_seconds=5.0)
+
+    assert result.analysis_type == "semantic"
+    video_input = provider._client.interactions.calls[0]["input"][0]
+    assert video_input["type"] == "video"
+    assert video_input["mime_type"] == "video/mp4"
+    assert "data" in video_input
+    assert "uri" not in video_input
