@@ -61,6 +61,20 @@ Gemini video input uses two transports automatically:
 
 This means normal phone-camera videos can be analyzed without the caller first transcoding them just to satisfy the inline request limit.
 
+## Background Gemini inference and webhooks
+
+Semantic inference is submitted as a background Gemini Interaction rather than keeping the initial HTTP request open for the entire video analysis. The provider polls the stored interaction until completion, which avoids the server-side request deadline that can affect long video inference.
+
+A webhook can also be configured for completion/failure notifications:
+
+```bash
+export VIDEO_ANALYSIS_GEMINI_WEBHOOK_URL="https://example.com/gemini-webhook"
+```
+
+When configured, the provider sends this URL in Gemini's dynamic `webhook_config` along with metadata containing the local video path and analysis type. Gemini requires `background=True` for webhook-configured interactions.
+
+The current synchronous `analyze()` API still waits for the completed interaction so existing callers receive a `SemanticAnalysis` object. The webhook is an additional notification channel and can be used by a future job-oriented API.
+
 ## Semantic analysis
 
 ```python
