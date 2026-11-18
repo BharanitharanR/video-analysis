@@ -87,6 +87,25 @@ semantic_json = semantic.model_dump(mode="json")
 
 The semantic artifact is intentionally separate from the deterministic report.
 
+## Merge artifacts
+
+Deterministic and semantic analysis can also be persisted as independent artifacts and merged later. This keeps the two contracts separate and makes the merge reproducible without rerunning Gemini.
+
+```bash
+video-analysis merge deterministic.json semantic.json -o analysis.json
+```
+
+The command validates `semantic.json` against the semantic contract, preserves all deterministic dimensions, and writes the semantic artifact under `video.dimensions.semantic`.
+
+Python API:
+
+```python
+from video_analysis.merge import merge_analysis_artifacts, write_merged_analysis
+
+final = merge_analysis_artifacts("deterministic.json", "semantic.json")
+write_merged_analysis("deterministic.json", "semantic.json", "analysis.json")
+```
+
 ## Merge
 
 ```python
