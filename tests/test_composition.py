@@ -55,3 +55,14 @@ def test_compile_song_spec_uses_song_spec_1_0():
 
 def test_compiled_song_spec_is_json_serializable():
     json.dumps(compile_song_spec(sample_plan()))
+
+
+def test_composition_plan_requires_full_duration_coverage():
+    data = sample_plan().model_dump()
+    data["sections"][-1]["end_seconds"] = 80.0
+    try:
+        CompositionPlan.model_validate(data)
+    except ValueError as exc:
+        assert "full video duration" in str(exc)
+    else:
+        raise AssertionError("Expected incomplete composition coverage to fail")
