@@ -82,7 +82,6 @@ pipeline = VideoAnalysisPipeline(
 )
 final = pipeline.analyze("IMG_0771.mov")
 ```
-```
 
 ## Development
 
