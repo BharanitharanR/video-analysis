@@ -81,3 +81,15 @@ def test_gemini_schema_omits_incompatible_constraints():
     nodes = list(walk(schema))
     assert all("exclusiveMinimum" not in node for node in nodes)
     assert all("maxItems" not in node for node in nodes)
+
+def test_gemini_schema_excludes_contract_owned_fields():
+    schema = _gemini_response_schema()
+    properties = schema["properties"]
+    required = schema.get("required", [])
+
+    assert "schema_version" not in properties
+    assert "analysis_type" not in properties
+    assert "duration_seconds" not in properties
+    assert "schema_version" not in required
+    assert "analysis_type" not in required
+    assert "duration_seconds" not in required
