@@ -3,24 +3,21 @@
 A standalone, dimension-based video analysis engine. It separates deterministic
 media measurements from AI-generated semantic interpretation.
 
-## Design
+## Architecture
 
-The engine produces two independent artifacts:
+The skill has two independent analysis paths:
 
-1. **Deterministic report** — technical metadata, audio stream metadata, GPS
-   metadata, quality measurements, scene detection, and temporal evidence.
-2. **Semantic report** — a separate JSON document containing temporal mode,
-   activity, mood, observations, events, and content inferred from the video.
+1. **Deterministic video analysis** — FFprobe, OpenCV and optional PySceneDetect
+   measure the media and produce technical, audio, location, quality, scenes and
+   temporal dimensions.
+2. **Semantic AI analysis** — an optional Gemini provider watches the video and
+   returns a separate semantic JSON artifact containing mode, activity, mood,
+   observations and events.
 
-The Gemini provider returns only the semantic document. It does not append to,
-rewrite, or reproduce the deterministic report. The application validates the
-semantic response with Pydantic and the merger adds it under
-`video.dimensions.semantic`, preserving all existing deterministic dimensions.
+The AI artifact is validated independently and then merged under
+`video.dimensions.semantic`. AI never overwrites deterministic dimensions.
 
 ## Install
-
-Python 3.10+ is required. FFprobe (from FFmpeg) must be available on PATH for
-technical media inspection.
 
 ```bash
 python -m venv .venv
@@ -28,54 +25,40 @@ source .venv/bin/activate
 python -m pip install -e '.[scenes,gemini,dev]'
 ```
 
-For deterministic analysis without Gemini:
+FFprobe must be available on PATH for deterministic media inspection.
+
+## Deterministic analysis
 
 ```bash
-python -m pip install -e '.[scenes,dev]'
+video-analysis analyze IMG_0771.mov -o analysis.json
 ```
 
-Set `GEMINI_API_KEY` in your environment before using the Gemini provider.
-Do not commit API keys.
+The deterministic analyzer supports MOV, MP4, MKV, WebM, AVI and M4V containers
+subject to codecs supported by the installed FFmpeg/OpenCV builds.
 
-## Semantic-only provider
+## Semantic analysis
 
 ```python
 from video_analysis.semantic.gemini import GeminiSemanticProvider
 
 provider = GeminiSemanticProvider(model="gemini-2.5-flash")
-semantic = provider.analyze("clip.mov", duration_seconds=9.568333)
+semantic = provider.analyze("IMG_0771.mov", duration_seconds=9.568333)
 semantic_json = semantic.model_dump(mode="json")
 ```
 
-The semantic response is a separate artifact with `analysis_type: "semantic"`.
-It contains the duration constraint, overall mood, content summary, temporal
-segments, and localized events. It intentionally excludes codec, resolution,
-FPS, bitrate, quality metrics, and GPS metadata.
+The semantic artifact is intentionally separate from the deterministic report.
 
 ## Merge
 
 ```python
 from video_analysis.semantic.merge import merge_semantic_analysis
-
-final_report = merge_semantic_analysis(
-    deterministic_report=deterministic_json,
-    semantic=semantic,
-)
+final = merge_semantic_analysis(deterministic_json, semantic)
 ```
 
-The merge is additive and namespaced. Existing deterministic dimensions are
-never overwritten.
+## Development
 
-## Gemini configuration
+```bash
+pytest
+```
 
-Install the optional integration using `.[gemini]`. The provider uses the
-Google GenAI Python SDK, reads `GEMINI_API_KEY` from the environment, requests
-JSON output conforming to the Pydantic schema, parses the response, and validates
-it again locally. Gemini is optional; deterministic analysis does not require
-the Google SDK.
-
-## Supported containers
-
-MOV, MP4, MKV, WebM, AVI, and M4V work through FFprobe/FFmpeg and the installed
-OpenCV decoder. Actual support depends on codecs available in the FFmpeg/OpenCV
-build. Files are not transcoded by default.
+Set `GEMINI_API_KEY` only in the environment. Never commit API keys.
