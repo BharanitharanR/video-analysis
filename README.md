@@ -132,3 +132,57 @@ pytest
 ```
 
 Set `GEMINI_API_KEY` only in the environment. Never commit API keys.
+## Video-to-music composition
+
+The completed `analysis.json` can be turned into a provider-neutral SongSpec 1.0
+for the existing **text-to-compose** skill.
+
+The architecture deliberately uses two stages:
+
+1. Gemini receives the completed analysis artifact and creates a `CompositionPlan`.
+2. Local deterministic code compiles that plan into SongSpec 1.0, including exact
+   seconds-to-beats conversion.
+
+This keeps creative decisions in the LLM while keeping schema compliance and timing
+arithmetic deterministic.
+
+```text
+analysis.json
+     |
+     v
+Gemini CompositionPlan
+     |
+     v
+deterministic compiler
+     |
+     v
+song-spec.json (SongSpec 1.0)
+     |
+     v
+text-to-compose
+     |
+     v
+ACE-Step / Eleven Music / Suno
+```
+
+Run:
+
+```bash
+video-analysis compose analysis.json -o song-spec.json
+```
+
+Use a different composition model:
+
+```bash
+video-analysis compose analysis.json \
+  --gemini-model gemini-3.6-flash \
+  -o song-spec.json
+```
+
+The generated SongSpec is instrumental by default because it is intended as an
+overlay soundtrack. The composition planner uses the semantic timeline, story,
+moods, moments, events, edit points and environment from `analysis.json` to make
+the music evolve with the video.
+
+The generated `song-spec.json` is intentionally compatible with the existing
+text-to-compose contract rather than introducing another audio-generation system.
