@@ -52,4 +52,9 @@ class CompositionPlan(StrictModel):
             if section.start_seconds < previous_end - 0.05:
                 raise ValueError("composition sections must be ordered and non-overlapping")
             previous_end = section.end_seconds
+
+        if self.sections[0].start_seconds > 0.25:
+            raise ValueError("composition must start at the beginning of the video")
+        if self.sections[-1].end_seconds < self.duration_seconds - 0.25:
+            raise ValueError("composition must cover the full video duration")
         return self
