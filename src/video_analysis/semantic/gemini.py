@@ -16,6 +16,8 @@ from .prompt import SYSTEM_INSTRUCTION, build_semantic_prompt
 MAX_INLINE_VIDEO_BYTES = 20 * 1024 * 1024
 DEFAULT_FILE_POLL_INTERVAL_SECONDS = 2.0
 DEFAULT_FILE_PROCESSING_TIMEOUT_SECONDS = 300.0
+DEFAULT_INTERACTION_POLL_INTERVAL_SECONDS = 5.0
+DEFAULT_INTERACTION_PROCESSING_TIMEOUT_SECONDS = 1800.0
 DEFAULT_RAW_RESPONSE_LOG = "gemini-response.raw.json"
 
 
@@ -80,6 +82,9 @@ class GeminiSemanticProvider:
         *,
         file_poll_interval_seconds: float = DEFAULT_FILE_POLL_INTERVAL_SECONDS,
         file_processing_timeout_seconds: float = DEFAULT_FILE_PROCESSING_TIMEOUT_SECONDS,
+        interaction_poll_interval_seconds: float = DEFAULT_INTERACTION_POLL_INTERVAL_SECONDS,
+        interaction_processing_timeout_seconds: float = DEFAULT_INTERACTION_PROCESSING_TIMEOUT_SECONDS,
+        webhook_url: str | None = None,
     ) -> None:
         try:
             from google import genai
@@ -91,6 +96,9 @@ class GeminiSemanticProvider:
         self.model = model
         self.file_poll_interval_seconds = file_poll_interval_seconds
         self.file_processing_timeout_seconds = file_processing_timeout_seconds
+        self.interaction_poll_interval_seconds = interaction_poll_interval_seconds
+        self.interaction_processing_timeout_seconds = interaction_processing_timeout_seconds
+        self.webhook_url = webhook_url or os.environ.get("VIDEO_ANALYSIS_GEMINI_WEBHOOK_URL")
 
     def _upload_video(self, path: Path) -> Any:
         """Upload a large video and wait until Gemini has processed it."""
@@ -157,20 +165,59 @@ class GeminiSemanticProvider:
         prompt = build_semantic_prompt(duration_seconds, evidence)
         schema = _gemini_response_schema()
 
-        interaction = self._client.interactions.create(
-            model=self.model,
-            input=[
+        interaction_kwargs: dict[str, Any] = {
+            "model": self.model,
+            "input": [
                 video_input,
                 {"type": "text", "text": prompt},
             ],
-            system_instruction=SYSTEM_INSTRUCTION,
-            response_format={
+            "system_instruction": SYSTEM_INSTRUCTION,
+            "response_format": {
                 "type": "text",
                 "mime_type": "application/json",
                 "schema": schema,
             },
-            store=False,
-        )
+            # Background interactions avoid holding the initial HTTP request
+            # open for long video inference. This is the important distinction
+            # from the synchronous request that can fail with server-side 504s.
+            "background": True,
+            "store": True,
+        }
+
+        if self.webhook_url:
+            interaction_kwargs["webhook_config"] = {
+                "uris": [self.webhook_url],
+                "user_metadata": {
+                    "video_path": str(path),
+                    "analysis_type": "semantic",
+                },
+            }
+
+        interaction = self._client.interactions.create(**interaction_kwargs)
+        interaction_id = getattr(interaction, "id", None)
+        if not interaction_id:
+            raise RuntimeError("Gemini background interaction did not return an interaction ID.")
+
+        deadline = time.monotonic() + self.interaction_processing_timeout_seconds
+        while True:
+            status = str(getattr(interaction, "status", "")).lower()
+            if status == "completed":
+                break
+            if status in {"failed", "cancelled", "canceled", "incomplete"}:
+                errors = getattr(interaction, "errors", None)
+                raise RuntimeError(
+                    f"Gemini interaction {interaction_id} ended with status={status}; "
+                    f"errors={errors}"
+                )
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"Gemini interaction {interaction_id} did not complete within "
+                    f"{self.interaction_processing_timeout_seconds:.0f} seconds; "
+                    f"last status={status or 'unknown'}"
+                )
+
+            time.sleep(self.interaction_poll_interval_seconds)
+            interaction = self._client.interactions.get(interaction_id)
 
         output_text = getattr(interaction, "output_text", None)
 
