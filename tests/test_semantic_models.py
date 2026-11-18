@@ -119,6 +119,8 @@ def test_gemini_large_video_uses_files_api_uri(monkeypatch, tmp_path):
             self.mime_type = "video/quicktime"
 
     class FakeInteraction:
+        id = "interaction-test"
+        status = "completed"
         output_text = json.dumps(valid_semantic())
 
     class FakeFiles:
@@ -152,6 +154,9 @@ def test_gemini_large_video_uses_files_api_uri(monkeypatch, tmp_path):
     provider.model = "gemini-test"
     provider.file_poll_interval_seconds = 0
     provider.file_processing_timeout_seconds = 1
+    provider.interaction_poll_interval_seconds = 0
+    provider.interaction_processing_timeout_seconds = 1
+    provider.webhook_url = None
 
     monkeypatch.setattr(gemini, "MAX_INLINE_VIDEO_BYTES", 1)
 
@@ -197,6 +202,9 @@ def test_gemini_small_video_stays_inline(monkeypatch, tmp_path):
     provider.model = "gemini-test"
     provider.file_poll_interval_seconds = 0
     provider.file_processing_timeout_seconds = 1
+    provider.interaction_poll_interval_seconds = 0
+    provider.interaction_processing_timeout_seconds = 1
+    provider.webhook_url = None
 
     monkeypatch.setattr(gemini, "MAX_INLINE_VIDEO_BYTES", 1024)
 
@@ -208,3 +216,49 @@ def test_gemini_small_video_stays_inline(monkeypatch, tmp_path):
     assert video_input["mime_type"] == "video/mp4"
     assert "data" in video_input
     assert "uri" not in video_input
+
+
+def test_gemini_background_interaction_uses_webhook(monkeypatch, tmp_path):
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"video")
+
+    class FakeInteraction:
+        id = "interaction-webhook"
+        status = "completed"
+        output_text = json.dumps(valid_semantic())
+
+    class FakeInteractions:
+        def __init__(self):
+            self.calls = []
+
+        def create(self, **kwargs):
+            self.calls.append(kwargs)
+            return FakeInteraction()
+
+        def get(self, interaction_id):
+            raise AssertionError("completed interactions should not be polled")
+
+    class FakeClient:
+        def __init__(self):
+            self.interactions = FakeInteractions()
+            self.files = None
+
+    provider = object.__new__(GeminiSemanticProvider)
+    provider._client = FakeClient()
+    provider.model = "gemini-test"
+    provider.interaction_poll_interval_seconds = 0
+    provider.interaction_processing_timeout_seconds = 1
+    provider.webhook_url = "https://example.test/gemini-webhook"
+    provider.file_poll_interval_seconds = 0
+    provider.file_processing_timeout_seconds = 1
+
+    monkeypatch.setattr(gemini, "MAX_INLINE_VIDEO_BYTES", 1024)
+
+    result = provider.analyze(video, duration_seconds=5.0)
+
+    assert result.analysis_type == "semantic"
+    kwargs = provider._client.interactions.calls[0]
+    assert kwargs["background"] is True
+    assert kwargs["store"] is True
+    assert kwargs["webhook_config"]["uris"] == ["https://example.test/gemini-webhook"]
+    assert kwargs["webhook_config"]["user_metadata"]["analysis_type"] == "semantic"
