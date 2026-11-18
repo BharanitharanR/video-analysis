@@ -45,6 +45,12 @@ class GeminiCompositionProvider:
         else:
             payload = analysis
 
+        duration = payload.get("video", {}).get("dimensions", {}).get("technical", {}).get("duration_seconds")
+        if duration is None:
+            raise ValueError(
+                "analysis.json is missing video.dimensions.technical.duration_seconds"
+            )
+
         prompt = build_composition_prompt(payload)
         interaction = run_background_interaction(
             self._client,
@@ -62,9 +68,14 @@ class GeminiCompositionProvider:
             DEFAULT_RAW_RESPONSE_LOG,
         )
 
+        def validate(result: dict) -> CompositionPlan:
+            # Video duration is authoritative from deterministic analysis.
+            result["duration_seconds"] = float(duration)
+            return CompositionPlan.model_validate(result)
+
         return parse_json_response(
             interaction,
             artifact_name="composition",
             raw_path=raw_path,
-            validator=CompositionPlan.model_validate,
+            validator=validate,
         )
