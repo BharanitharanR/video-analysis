@@ -36,6 +36,22 @@ video-analysis analyze IMG_0771.mov -o analysis.json
 The deterministic analyzer supports MOV, MP4, MKV, WebM, AVI and M4V containers
 subject to codecs supported by the installed FFmpeg/OpenCV builds.
 
+## End-to-end pipeline
+
+The pipeline runs deterministic analysis first, then optionally invokes a semantic provider with the measured duration and read-only temporal/scene evidence. The final report keeps deterministic dimensions intact and adds the validated semantic artifact under `video.dimensions.semantic`.
+
+```bash
+video-analysis analyze IMG_0771.mov -o analysis.json --semantic gemini
+```
+
+Use a different Gemini model when needed:
+
+```bash
+video-analysis analyze IMG_0771.mov --semantic gemini --gemini-model gemini-4-hydrogen
+```
+
+Without `--semantic`, the CLI remains deterministic-only.
+
 ## Semantic analysis
 
 ```python
@@ -53,6 +69,18 @@ The semantic artifact is intentionally separate from the deterministic report.
 ```python
 from video_analysis.semantic.merge import merge_semantic_analysis
 final = merge_semantic_analysis(deterministic_json, semantic)
+```
+
+For applications that want the complete orchestration:
+
+```python
+from video_analysis.pipeline import VideoAnalysisPipeline
+from video_analysis.semantic.gemini import GeminiSemanticProvider
+
+pipeline = VideoAnalysisPipeline(
+    semantic_provider=GeminiSemanticProvider(model="gemini-4-hydrogen"),
+)
+final = pipeline.analyze("IMG_0771.mov")
 ```
 
 ## Development
