@@ -2,14 +2,18 @@
 from __future__ import annotations
 
 import base64
-import copy
-import json
 import mimetypes
 import os
-import time
 from pathlib import Path
 from typing import Any
 
+from ..gemini import (
+    create_client,
+    parse_json_response,
+    persist_raw_response,
+    run_background_interaction,
+    sanitize_response_schema,
+)
 from .models import SemanticAnalysis
 from .prompt import SYSTEM_INSTRUCTION, build_semantic_prompt
 
@@ -22,27 +26,8 @@ DEFAULT_RAW_RESPONSE_LOG = "gemini-response.raw.json"
 
 
 def _gemini_response_schema() -> dict[str, Any]:
-    """Return a Gemini-compatible copy of the Pydantic JSON schema.
-
-    Pydantic correctly emits JSON Schema constraints such as
-    exclusiveMinimum and maxItems. The Gemini structured-output compiler can
-    reject some of these constraints depending on the model/API version, so
-    application-level Pydantic validation remains authoritative while the
-    transport schema is kept conservative.
-    """
-    schema = copy.deepcopy(SemanticAnalysis.model_json_schema())
-
-    def sanitize(node: Any) -> None:
-        if isinstance(node, dict):
-            node.pop("exclusiveMinimum", None)
-            node.pop("maxItems", None)
-            for value in node.values():
-                sanitize(value)
-        elif isinstance(node, list):
-            for value in node:
-                sanitize(value)
-
-    sanitize(schema)
+    """Return a conservative Gemini schema for SemanticAnalysis."""
+    schema = sanitize_response_schema(SemanticAnalysis.model_json_schema())
 
     # These fields belong to the skill contract, not to Gemini. Asking the
     # model to reproduce fixed metadata wastes output tokens and can still
@@ -71,8 +56,8 @@ class GeminiSemanticProvider:
     Set GEMINI_API_KEY in the environment. The API key is never accepted in
     source code or logged by this class.
 
-    Small videos are sent inline. Larger videos are uploaded through the
-    Gemini Files API and referenced by URI, so the provider can handle normal
+    Small videos are sent inline. Larger videos are uploaded through the Gemini
+    Files API and referenced by URI, so the provider can handle normal
     phone-camera files without requiring the caller to transcode them first.
     """
 
@@ -86,13 +71,7 @@ class GeminiSemanticProvider:
         interaction_processing_timeout_seconds: float = DEFAULT_INTERACTION_PROCESSING_TIMEOUT_SECONDS,
         webhook_url: str | None = None,
     ) -> None:
-        try:
-            from google import genai
-        except ImportError as exc:
-            raise RuntimeError(
-                "Gemini support is optional. Install video-analysis[gemini]."
-            ) from exc
-        self._client = genai.Client()
+        self._client = create_client()
         self.model = model
         self.file_poll_interval_seconds = file_poll_interval_seconds
         self.file_processing_timeout_seconds = file_processing_timeout_seconds
@@ -103,6 +82,8 @@ class GeminiSemanticProvider:
     def _upload_video(self, path: Path) -> Any:
         """Upload a large video and wait until Gemini has processed it."""
         uploaded_file = self._client.files.upload(file=str(path))
+        import time
+
         deadline = time.monotonic() + self.file_processing_timeout_seconds
 
         while True:
@@ -165,27 +146,9 @@ class GeminiSemanticProvider:
         prompt = build_semantic_prompt(duration_seconds, evidence)
         schema = _gemini_response_schema()
 
-        interaction_kwargs: dict[str, Any] = {
-            "model": self.model,
-            "input": [
-                video_input,
-                {"type": "text", "text": prompt},
-            ],
-            "system_instruction": SYSTEM_INSTRUCTION,
-            "response_format": {
-                "type": "text",
-                "mime_type": "application/json",
-                "schema": schema,
-            },
-            # Background interactions avoid holding the initial HTTP request
-            # open for long video inference. This is the important distinction
-            # from the synchronous request that can fail with server-side 504s.
-            "background": True,
-            "store": True,
-        }
-
+        webhook_config = None
         if self.webhook_url:
-            interaction_kwargs["webhook_config"] = {
+            webhook_config = {
                 "uris": [self.webhook_url],
                 "user_metadata": {
                     "video_path": str(path),
@@ -193,60 +156,37 @@ class GeminiSemanticProvider:
                 },
             }
 
-        interaction = self._client.interactions.create(**interaction_kwargs)
-        interaction_id = getattr(interaction, "id", None)
-        if not interaction_id:
-            raise RuntimeError("Gemini background interaction did not return an interaction ID.")
-
-        deadline = time.monotonic() + self.interaction_processing_timeout_seconds
-        while True:
-            status = str(getattr(interaction, "status", "")).lower()
-            if status == "completed":
-                break
-            if status in {"failed", "cancelled", "canceled", "incomplete"}:
-                errors = getattr(interaction, "errors", None)
-                raise RuntimeError(
-                    f"Gemini interaction {interaction_id} ended with status={status}; "
-                    f"errors={errors}"
-                )
-            if time.monotonic() >= deadline:
-                raise TimeoutError(
-                    f"Gemini interaction {interaction_id} did not complete within "
-                    f"{self.interaction_processing_timeout_seconds:.0f} seconds; "
-                    f"last status={status or 'unknown'}"
-                )
-
-            time.sleep(self.interaction_poll_interval_seconds)
-            interaction = self._client.interactions.get(interaction_id)
-
-        output_text = getattr(interaction, "output_text", None)
-
-        # Persist the exact model response before any parsing or Pydantic
-        # validation. If validation fails, the paid Gemini response is still
-        # available locally for debugging instead of requiring another request.
-        raw_response_path = Path(
-            os.environ.get("VIDEO_ANALYSIS_GEMINI_RAW_RESPONSE", DEFAULT_RAW_RESPONSE_LOG)
+        interaction = run_background_interaction(
+            self._client,
+            model=self.model,
+            input_items=[
+                video_input,
+                {"type": "text", "text": prompt},
+            ],
+            system_instruction=SYSTEM_INSTRUCTION,
+            response_schema=schema,
+            poll_interval_seconds=self.interaction_poll_interval_seconds,
+            processing_timeout_seconds=self.interaction_processing_timeout_seconds,
+            webhook_config=webhook_config,
         )
-        raw_response_path.write_text(output_text or "", encoding="utf-8")
 
-        if not output_text:
-            raise RuntimeError(
-                f"Gemini returned an empty semantic response; raw response logged to "
-                f"{raw_response_path}"
-            )
+        raw_response_path = persist_raw_response(
+            getattr(interaction, "output_text", None),
+            "VIDEO_ANALYSIS_GEMINI_RAW_RESPONSE",
+            DEFAULT_RAW_RESPONSE_LOG,
+        )
 
-        payload = json.loads(output_text)
-
-        # Contract-owned fields are authoritative locally; Gemini does not
-        # need to spend output tokens generating them.
-        payload["schema_version"] = "0.2"
-        payload["analysis_type"] = "semantic"
-        payload["duration_seconds"] = duration_seconds
-
-        try:
+        def validate(payload: dict[str, Any]) -> SemanticAnalysis:
+            # Contract-owned fields are authoritative locally; Gemini does not
+            # need to spend output tokens generating them.
+            payload["schema_version"] = "0.2"
+            payload["analysis_type"] = "semantic"
+            payload["duration_seconds"] = duration_seconds
             return SemanticAnalysis.model_validate(payload)
-        except Exception as exc:
-            raise ValueError(
-                f"Gemini semantic response failed local validation. "
-                f"Raw response saved to {raw_response_path}"
-            ) from exc
+
+        return parse_json_response(
+            interaction,
+            artifact_name="semantic",
+            raw_path=raw_response_path,
+            validator=validate,
+        )
