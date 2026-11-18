@@ -5,6 +5,7 @@ import base64
 import copy
 import json
 import mimetypes
+import os
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,7 @@ from .models import SemanticAnalysis
 from .prompt import SYSTEM_INSTRUCTION, build_semantic_prompt
 
 MAX_INLINE_VIDEO_BYTES = 20 * 1024 * 1024
+DEFAULT_RAW_RESPONSE_LOG = "gemini-response.raw.json"
 
 
 def _gemini_response_schema() -> dict[str, Any]:
@@ -116,8 +118,20 @@ class GeminiSemanticProvider:
         )
 
         output_text = getattr(interaction, "output_text", None)
+
+        # Persist the exact model response before any parsing or Pydantic
+        # validation. If validation fails, the paid Gemini response is still
+        # available locally for debugging instead of requiring another request.
+        raw_response_path = Path(
+            os.environ.get("VIDEO_ANALYSIS_GEMINI_RAW_RESPONSE", DEFAULT_RAW_RESPONSE_LOG)
+        )
+        raw_response_path.write_text(output_text or "", encoding="utf-8")
+
         if not output_text:
-            raise RuntimeError("Gemini returned an empty semantic response")
+            raise RuntimeError(
+                f"Gemini returned an empty semantic response; raw response logged to "
+                f"{raw_response_path}"
+            )
 
         payload = json.loads(output_text)
 
@@ -127,4 +141,10 @@ class GeminiSemanticProvider:
         payload["analysis_type"] = "semantic"
         payload["duration_seconds"] = duration_seconds
 
-        return SemanticAnalysis.model_validate(payload)
+        try:
+            return SemanticAnalysis.model_validate(payload)
+        except Exception as exc:
+            raise ValueError(
+                f"Gemini semantic response failed local validation. "
+                f"Raw response saved to {raw_response_path}"
+            ) from exc
