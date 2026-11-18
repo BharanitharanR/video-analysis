@@ -8,17 +8,22 @@ from video_analysis.semantic.gemini import _gemini_response_schema
 
 def valid_semantic():
     return {
-        "schema_version": "0.1",
+        "schema_version": "0.2",
         "analysis_type": "semantic",
         "duration_seconds": 5.0,
         "overall_mood": "curious",
         "overall_mood_confidence": 0.8,
         "content": {
             "environment": "outdoor",
-            "subjects": [],
+            "people": [],
+            "vehicles": [],
             "objects": [],
+            "activities": [],
+            "interactions": [],
+            "text": [],
             "summary": "A short outdoor clip.",
         },
+        "story": "A person observes an outdoor scene.",
         "timeline": [{
             "start_seconds": 0.0,
             "end_seconds": 5.0,
@@ -27,10 +32,13 @@ def valid_semantic():
             "mood": "curious",
             "mood_intensity": 0.5,
             "confidence": 0.8,
+            "story_context": "A person observes the scene.",
             "visual_observations": ["A person looks toward the camera."],
             "audio_observations": [],
         }],
         "events": [],
+        "moments": [],
+        "edit_points": [],
     }
 
 
@@ -81,6 +89,7 @@ def test_gemini_schema_omits_incompatible_constraints():
     nodes = list(walk(schema))
     assert all("exclusiveMinimum" not in node for node in nodes)
     assert all("maxItems" not in node for node in nodes)
+
 
 def test_gemini_schema_excludes_contract_owned_fields():
     schema = _gemini_response_schema()
