@@ -15,7 +15,11 @@ The skill has two independent analysis paths:
    observations and events.
 
 The AI artifact is validated independently and then merged under
-`video.dimensions.semantic`. AI never overwrites deterministic dimensions.
+`video.dimensions.semantic`. It also classifies the video's overall content type
+under `video.dimensions.video_type` (demo, tutorial, walkthrough, presentation,
+vlog, gameplay, meeting, review, real-world footage, and more). This is distinct
+from the semantic timeline's visual `mode` such as `screen_recording` or `real_world`.
+AI never overwrites deterministic dimensions.
 
 ## Install
 
@@ -85,7 +89,7 @@ semantic = provider.analyze("IMG_0771.mov", duration_seconds=9.568333)
 semantic_json = semantic.model_dump(mode="json")
 ```
 
-The semantic artifact is intentionally separate from the deterministic report.
+The semantic artifact is intentionally separate from the deterministic report. Its `video_type` classification is also promoted to `video.dimensions.video_type` by the merger for downstream skills such as `narrator`.
 
 ## Merge artifacts
 
