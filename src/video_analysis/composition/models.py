@@ -12,6 +12,9 @@ from ..models import StrictModel
 class CompositionSection(StrictModel):
     start_seconds: float = Field(ge=0)
     end_seconds: float = Field(gt=0)
+    # Short label such as "Scenic Breath". The music provider gets the section
+    # name, so a full purpose sentence here would read as a stage direction.
+    name: str = Field(default="", max_length=60)
     purpose: str = Field(min_length=1, max_length=240)
     energy: float = Field(ge=0, le=1)
     mood: str = Field(default="neutral", min_length=1, max_length=80)

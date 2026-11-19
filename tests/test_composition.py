@@ -29,11 +29,14 @@ def sample_plan():
             },
             {
                 "start_seconds": 15.8,
-                "end_seconds": 27.2,
+                "end_seconds": 87.0,
+                "name": "Playful Family Beat",
                 "purpose": "playful family interaction",
                 "energy": 0.75,
                 "mood": "joyful",
                 "instruments": ["acoustic guitar", "light percussion"],
+                "texture": "bright strummed rhythm",
+                "transition": "settle into a warm cadence",
             },
         ],
     })
@@ -66,3 +69,15 @@ def test_composition_plan_requires_full_duration_coverage():
         assert "full video duration" in str(exc)
     else:
         raise AssertionError("Expected incomplete composition coverage to fail")
+
+
+def test_compiled_sections_keep_name_and_musical_feel():
+    sections = compile_song_spec(sample_plan())["arrangement"]["sections"]
+
+    # No name given: falls back to the purpose.
+    assert sections[0]["name"] == "curious introduction"
+    assert sections[1]["name"] == "Playful Family Beat"
+    assert sections[1]["energy"] == 0.75
+    assert sections[1]["mood"] == "joyful"
+    assert sections[1]["texture"] == "bright strummed rhythm"
+    assert sections[1]["transition"] == "settle into a warm cadence"

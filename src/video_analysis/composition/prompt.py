@@ -25,6 +25,9 @@ IMPORTANT:
 - Do not write lyrics. This plan will be compiled into SongSpec 1.0 by deterministic code.
 - Keep the plan practical for text-to-compose: clear style, world, instruments, tempo, key/raga,
   section purposes, and ending.
+- Give every section a short evocative name of two or three words (for example "Scenic Breath"),
+  a mood word or two, and an energy from 0 to 1. The music engine hears the name, mood, energy,
+  texture and transition as the description of that section, so keep them musical and concrete.
 
 The resulting music should feel composed for this specific video rather than being a generic
 "travel montage" track.
