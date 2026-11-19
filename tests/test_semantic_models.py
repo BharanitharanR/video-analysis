@@ -178,6 +178,10 @@ def test_gemini_small_video_stays_inline(monkeypatch, tmp_path):
     video.write_bytes(b"small-video")
 
     class FakeInteraction:
+        # Background interactions return an id and a status; "completed"
+        # skips polling.
+        id = "interaction-1"
+        status = "completed"
         output_text = json.dumps(valid_semantic())
 
     class FakeFiles:

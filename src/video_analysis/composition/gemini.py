@@ -5,10 +5,13 @@ import json
 from pathlib import Path
 
 from ..gemini import (
+    DEFAULT_COMPOSITION_MODELS,
     create_client,
+    model_chain,
     parse_json_response,
     persist_raw_response,
     run_background_interaction,
+    run_with_model_fallback,
     sanitize_response_schema,
 )
 from .models import CompositionPlan
@@ -52,14 +55,17 @@ class GeminiCompositionProvider:
             )
 
         prompt = build_composition_prompt(payload)
-        interaction = run_background_interaction(
-            self._client,
-            model=self.model,
-            input_items=[{"type": "text", "text": prompt}],
-            system_instruction=SYSTEM_INSTRUCTION,
-            response_schema=_schema(),
-            poll_interval_seconds=self.poll_interval_seconds,
-            processing_timeout_seconds=self.processing_timeout_seconds,
+        interaction, self.model_used = run_with_model_fallback(
+            model_chain(self.model, "VIDEO_ANALYSIS_COMPOSITION_MODELS", DEFAULT_COMPOSITION_MODELS),
+            lambda model: run_background_interaction(
+                self._client,
+                model=model,
+                input_items=[{"type": "text", "text": prompt}],
+                system_instruction=SYSTEM_INSTRUCTION,
+                response_schema=_schema(),
+                poll_interval_seconds=self.poll_interval_seconds,
+                processing_timeout_seconds=self.processing_timeout_seconds,
+            ),
         )
 
         raw_path = persist_raw_response(

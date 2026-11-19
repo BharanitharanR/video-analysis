@@ -8,10 +8,13 @@ from pathlib import Path
 from typing import Any
 
 from ..gemini import (
+    DEFAULT_SEMANTIC_MODELS,
     create_client,
+    model_chain,
     parse_json_response,
     persist_raw_response,
     run_background_interaction,
+    run_with_model_fallback,
     sanitize_response_schema,
 )
 from .models import SemanticAnalysis
@@ -156,18 +159,23 @@ class GeminiSemanticProvider:
                 },
             }
 
-        interaction = run_background_interaction(
-            self._client,
-            model=self.model,
-            input_items=[
-                video_input,
-                {"type": "text", "text": prompt},
-            ],
-            system_instruction=SYSTEM_INSTRUCTION,
-            response_schema=schema,
-            poll_interval_seconds=self.interaction_poll_interval_seconds,
-            processing_timeout_seconds=self.interaction_processing_timeout_seconds,
-            webhook_config=webhook_config,
+        # The upload above happens once; every model in the chain reads the
+        # same uploaded file or inline bytes.
+        interaction, self.model_used = run_with_model_fallback(
+            model_chain(self.model, "VIDEO_ANALYSIS_SEMANTIC_MODELS", DEFAULT_SEMANTIC_MODELS),
+            lambda model: run_background_interaction(
+                self._client,
+                model=model,
+                input_items=[
+                    video_input,
+                    {"type": "text", "text": prompt},
+                ],
+                system_instruction=SYSTEM_INSTRUCTION,
+                response_schema=schema,
+                poll_interval_seconds=self.interaction_poll_interval_seconds,
+                processing_timeout_seconds=self.interaction_processing_timeout_seconds,
+                webhook_config=webhook_config,
+            ),
         )
 
         raw_response_path = persist_raw_response(

@@ -186,3 +186,23 @@ the music evolve with the video.
 
 The generated `song-spec.json` is intentionally compatible with the existing
 text-to-compose contract rather than introducing another audio-generation system.
+## Model fallback
+
+Both Gemini steps (`analyze --semantic gemini` and `compose`) try the requested
+`--gemini-model` first and, if Gemini answers with a quota, rate-limit or server
+error (`429`, `RESOURCE_EXHAUSTED`, `INTERNAL`, `UNAVAILABLE`, ...), move to the
+next model in a chain of free-tier models. Bad input, a response that fails
+validation, and timeouts are not retried. The model that answered is printed to
+stderr as `Gemini model used: <model>`.
+
+| Variable | Effect |
+|---|---|
+| `VIDEO_ANALYSIS_SEMANTIC_MODELS` | comma-separated fallbacks for video analysis |
+| `VIDEO_ANALYSIS_COMPOSITION_MODELS` | comma-separated fallbacks for composition |
+| `VIDEO_ANALYSIS_MAX_MODEL_ATTEMPTS` | most models tried per step (default 3; each try is a paid call) |
+| `VIDEO_ANALYSIS_MODEL_FALLBACK=0` | use only the requested model |
+
+Default chains (free-tier models with quota, 2026-11-20):
+
+- analysis: gemini-4-hydrogen, gemini-3.8-flash, gemini-3.6-flash, gemini-2.5-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite
+- composition: gemini-3.6-flash, gemini-3.8-flash, gemini-4-hydrogen, gemini-2.5-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite, gemini-2.5-flash-lite
