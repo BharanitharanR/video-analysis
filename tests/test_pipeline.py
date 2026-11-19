@@ -86,3 +86,17 @@ def test_pipeline_without_semantic_provider_is_deterministic_only():
     result = VideoAnalysisPipeline(deterministic_analyzer=deterministic).analyze("clip.mov")
 
     assert "semantic" not in result["video"]["dimensions"]
+
+
+def test_video_type_classification_promoted_to_dimensions():
+    from video_analysis.semantic.merge import merge_semantic_analysis
+    payload = FakeSemanticProvider().analyze("clip.mov", 5.0).model_dump(mode="json")
+    payload["video_type"] = {
+        "primary": "demo", "confidence": 0.94,
+        "alternatives": [{"type": "tutorial", "confidence": 0.72}],
+        "reason": "The recording shows an interactive product workflow.",
+    }
+    semantic = SemanticAnalysis.model_validate(payload)
+    result = merge_semantic_analysis(FakeDeterministicAnalyzer().analyze("clip.mov"), semantic)
+    assert result["video"]["dimensions"]["video_type"]["primary"] == "demo"
+    assert result["video"]["dimensions"]["semantic"]["video_type"]["primary"] == "demo"

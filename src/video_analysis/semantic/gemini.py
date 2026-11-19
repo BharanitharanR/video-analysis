@@ -187,7 +187,7 @@ class GeminiSemanticProvider:
         def validate(payload: dict[str, Any]) -> SemanticAnalysis:
             # Contract-owned fields are authoritative locally; Gemini does not
             # need to spend output tokens generating them.
-            payload["schema_version"] = "0.2"
+            payload["schema_version"] = "0.3"
             payload["analysis_type"] = "semantic"
             payload["duration_seconds"] = duration_seconds
             return SemanticAnalysis.model_validate(payload)

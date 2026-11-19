@@ -15,7 +15,11 @@ The skill has two independent analysis paths:
    observations and events.
 
 The AI artifact is validated independently and then merged under
-`video.dimensions.semantic`. AI never overwrites deterministic dimensions.
+`video.dimensions.semantic`. It also classifies overall content type under
+`video.dimensions.video_type` (demo, tutorial, walkthrough, presentation, vlog,
+gameplay, meeting, review, real-world footage, and more). This is distinct from
+visual mode in individual timeline segments, such as `screen_recording` or
+`real_world`. AI never overwrites deterministic dimensions.
 
 ## Install
 
