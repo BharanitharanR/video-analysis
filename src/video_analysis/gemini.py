@@ -36,10 +36,21 @@ DEFAULT_COMPOSITION_MODELS = (
     "gemini-2.5-flash-lite",
 )
 
+class InvalidModelResponse(ValueError):
+    """Gemini answered, but the answer is empty, not JSON, or fails our
+    validation (for example a timestamp past the end of the video).
+
+    This is a fault of that model's answer, not of the request, so the chain
+    moves up to the next, larger model. It subclasses ValueError so callers
+    that already catch ValueError keep working.
+    """
+
+
 # Errors that say "this model, right now" rather than "this request": quota,
-# rate limits and server-side failures. Anything else (bad input, a response
-# that fails validation, a timeout on a long video) is raised at once, since
-# repeating it on another model would spend another paid call for nothing.
+# rate limits, server-side failures, and an answer that fails validation
+# (InvalidModelResponse). Anything else (bad input, a timeout on a long
+# video) is raised at once, since repeating it on another model would spend
+# another paid call for nothing.
 _RETRYABLE_MARKERS = (
     "INTERNAL", "UNAVAILABLE", "RESOURCE_EXHAUSTED", "DEADLINE_EXCEEDED",
     "OVERLOADED", "QUOTA", "RATE LIMIT", "TOO MANY REQUESTS",
@@ -48,6 +59,8 @@ _RETRYABLE_CODES = {429, 500, 502, 503, 504}
 
 
 def is_retryable_model_error(exc: BaseException) -> bool:
+    if isinstance(exc, InvalidModelResponse):
+        return True
     if isinstance(exc, (TimeoutError, ValueError)):
         return False
     code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
@@ -96,24 +109,77 @@ def run_with_model_fallback(
 ) -> tuple[T, str]:
     """Call `attempt(model)` down the chain until one model succeeds.
 
-    Each model is tried once. Moves on only for quota, rate-limit and
-    server errors; returns (result, model_used).
+    Each model is tried once. Moves on for quota, rate-limit and server
+    errors, and for an answer that fails validation (InvalidModelResponse),
+    so `attempt` should both call Gemini and validate the answer (see
+    call_and_validate). The chain length (model_chain's cap) bounds the
+    number of paid calls either way. Returns (result, model_used).
     """
     failures: list[str] = []
+    last_exc: BaseException | None = None
     for index, model in enumerate(models):
         try:
             result = attempt(model)
         except Exception as exc:  # noqa: BLE001 - classified below
             if not is_retryable_model_error(exc):
                 raise
-            summary = " ".join(str(exc).split())[:240]
+            last_exc = exc
+            summary = " ".join(_describe(exc).split())[:300]
             failures.append(f"{model}: {summary}")
             if index + 1 < len(models):
-                log(f"Gemini model {model} unavailable ({summary}); trying {models[index + 1]}")
+                reason = "gave an invalid answer" if isinstance(exc, InvalidModelResponse) else "unavailable"
+                log(f"Gemini model {model} {reason} ({summary}); trying {models[index + 1]}")
             continue
         log(f"Gemini model used: {model}")
         return result, model
-    raise RuntimeError("Every Gemini model in the fallback chain failed: " + " | ".join(failures))
+    raise RuntimeError(
+        "Every Gemini model in the fallback chain failed: " + " | ".join(failures)
+    ) from last_exc
+
+
+def _describe(exc: BaseException) -> str:
+    """The error text, plus the validation detail an InvalidModelResponse wraps."""
+    text = str(exc)
+    if isinstance(exc, InvalidModelResponse) and exc.__cause__ is not None:
+        cause = " ".join(str(exc.__cause__).split())
+        # Pydantic puts the useful line ("Value error, event exceeds video
+        # duration") after the field path; keep that part.
+        marker = cause.find("Value error")
+        text += f" ({cause[marker:marker + 120] if marker >= 0 else cause[:120]})"
+    return text
+
+
+def rejected_response_path(raw_path: Path, model: str) -> Path:
+    """Where a rejected answer is kept, so a later model's answer does not
+    overwrite it: gemini-response.json -> gemini-response.<model>.rejected.json."""
+    return raw_path.with_name(f"{raw_path.stem}.{model}.rejected{raw_path.suffix or '.json'}")
+
+
+def call_and_validate(
+    model: str,
+    *,
+    call: Callable[[str], Any],
+    artifact_name: str,
+    raw_env_var: str,
+    raw_default_name: str,
+    validator: Callable[[dict[str, Any]], T],
+) -> T:
+    """One model attempt: call Gemini, save the raw answer, validate it.
+
+    Used as the `attempt` for run_with_model_fallback, so an answer that
+    fails validation moves the chain up a model. A rejected answer is also
+    kept under rejected_response_path for inspection.
+    """
+    interaction = call(model)
+    output_text = getattr(interaction, "output_text", None)
+    raw_path = persist_raw_response(output_text, raw_env_var, raw_default_name)
+    try:
+        return parse_json_response(
+            interaction, artifact_name=artifact_name, raw_path=raw_path, validator=validator
+        )
+    except InvalidModelResponse:
+        rejected_response_path(raw_path, model).write_text(output_text or "", encoding="utf-8")
+        raise
 
 
 def create_client() -> Any:
@@ -217,7 +283,7 @@ def parse_json_response(
     """Parse and validate a completed Gemini JSON response."""
     output_text = getattr(interaction, "output_text", None)
     if not output_text:
-        raise RuntimeError(
+        raise InvalidModelResponse(
             f"Gemini returned an empty {artifact_name} response; "
             f"raw response saved to {raw_path}"
         )
@@ -225,7 +291,7 @@ def parse_json_response(
     try:
         payload = json.loads(output_text)
     except json.JSONDecodeError as exc:
-        raise ValueError(
+        raise InvalidModelResponse(
             f"Gemini returned invalid JSON for {artifact_name}; "
             f"raw response saved to {raw_path}"
         ) from exc
@@ -233,7 +299,7 @@ def parse_json_response(
     try:
         return validator(payload)
     except Exception as exc:
-        raise ValueError(
+        raise InvalidModelResponse(
             f"Gemini {artifact_name} response failed local validation. "
             f"Raw response saved to {raw_path}"
         ) from exc

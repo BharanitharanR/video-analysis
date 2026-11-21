@@ -236,12 +236,22 @@ speech and 0.60 for the others. The SongSpec gets `extra.narration_bed: true` an
 
 Both Gemini steps (`analyze --semantic gemini` and `compose`) start small and go
 big: the cheapest model with the most free quota goes first. `--gemini-model` has
-no default; pass it only to force a specific model to the front. If Gemini
-answers with a quota, rate-limit or server
-error (`429`, `RESOURCE_EXHAUSTED`, `INTERNAL`, `UNAVAILABLE`, ...), move to the
-next model in a chain of free-tier models. Bad input, a response that fails
-validation, and timeouts are not retried. The model that answered is printed to
-stderr as `Gemini model used: <model>`.
+no default; pass it only to force a specific model to the front. The next model
+in the chain is tried when:
+
+- Gemini answers with a quota, rate-limit or server error (`429`,
+  `RESOURCE_EXHAUSTED`, `INTERNAL`, `UNAVAILABLE`, ...), or
+- Gemini answers, but the answer is empty, not JSON, or fails local validation
+  (for example an event timed after the end of the video). Each model's answer
+  is validated inside its own attempt, so a weak answer from a small model
+  moves up to a bigger one instead of failing the step.
+
+Bad input and timeouts are not retried. Every attempt is a paid call, and the
+attempt cap below bounds them either way. The model that answered is printed
+to stderr as `Gemini model used: <model>`; a rejected answer is logged as
+`Gemini model <model> gave an invalid answer (...); trying <next>` and kept
+beside the raw response as `<raw>.<model>.rejected.json` (for example
+`gemini-response.gemini-3.5-flash-lite.rejected.json`).
 
 | Variable | Effect |
 |---|---|

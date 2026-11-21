@@ -6,10 +6,9 @@ from pathlib import Path
 
 from ..gemini import (
     DEFAULT_COMPOSITION_MODELS,
+    call_and_validate,
     create_client,
     model_chain,
-    parse_json_response,
-    persist_raw_response,
     run_background_interaction,
     run_with_model_fallback,
     sanitize_response_schema,
@@ -58,9 +57,8 @@ class GeminiCompositionProvider:
         timeline = load_voice_timeline(voice_timeline) if voice_timeline is not None else None
         voice_summary = summarize_voice_timeline(timeline, float(duration)) if timeline else None
         prompt = build_composition_prompt(payload, voice_summary)
-        interaction, self.model_used = run_with_model_fallback(
-            model_chain(self.model, "VIDEO_ANALYSIS_COMPOSITION_MODELS", DEFAULT_COMPOSITION_MODELS),
-            lambda model: run_background_interaction(
+        def call(model: str):
+            return run_background_interaction(
                 self._client,
                 model=model,
                 input_items=[{"type": "text", "text": prompt}],
@@ -68,25 +66,25 @@ class GeminiCompositionProvider:
                 response_schema=_schema(),
                 poll_interval_seconds=self.poll_interval_seconds,
                 processing_timeout_seconds=self.processing_timeout_seconds,
-            ),
-        )
-
-        raw_path = persist_raw_response(
-            getattr(interaction, "output_text", None),
-            "VIDEO_ANALYSIS_COMPOSITION_RAW_RESPONSE",
-            DEFAULT_RAW_RESPONSE_LOG,
-        )
+            )
 
         def validate(result: dict) -> CompositionPlan:
             # Video duration is authoritative from deterministic analysis.
             result["duration_seconds"] = float(duration)
             return CompositionPlan.model_validate(result)
 
-        plan = parse_json_response(
-            interaction,
-            artifact_name="composition",
-            raw_path=raw_path,
-            validator=validate,
+        # Each attempt is validated, so an answer that fails validation moves
+        # up to the next model in the chain.
+        plan, self.model_used = run_with_model_fallback(
+            model_chain(self.model, "VIDEO_ANALYSIS_COMPOSITION_MODELS", DEFAULT_COMPOSITION_MODELS),
+            lambda model: call_and_validate(
+                model,
+                call=call,
+                artifact_name="composition",
+                raw_env_var="VIDEO_ANALYSIS_COMPOSITION_RAW_RESPONSE",
+                raw_default_name=DEFAULT_RAW_RESPONSE_LOG,
+                validator=validate,
+            ),
         )
         if timeline is not None:
             apply_narration_bed(plan, timeline)

@@ -9,10 +9,9 @@ from typing import Any
 
 from ..gemini import (
     DEFAULT_SEMANTIC_MODELS,
+    call_and_validate,
     create_client,
     model_chain,
-    parse_json_response,
-    persist_raw_response,
     run_background_interaction,
     run_with_model_fallback,
     sanitize_response_schema,
@@ -172,11 +171,8 @@ class GeminiSemanticProvider:
                 },
             }
 
-        # The upload above happens once; every model in the chain reads the
-        # same uploaded file or inline bytes.
-        interaction, self.model_used = run_with_model_fallback(
-            model_chain(self.model, "VIDEO_ANALYSIS_SEMANTIC_MODELS", DEFAULT_SEMANTIC_MODELS),
-            lambda model: run_background_interaction(
+        def call(model: str) -> Any:
+            return run_background_interaction(
                 self._client,
                 model=model,
                 input_items=[
@@ -188,14 +184,7 @@ class GeminiSemanticProvider:
                 poll_interval_seconds=self.interaction_poll_interval_seconds,
                 processing_timeout_seconds=self.interaction_processing_timeout_seconds,
                 webhook_config=webhook_config,
-            ),
-        )
-
-        raw_response_path = persist_raw_response(
-            getattr(interaction, "output_text", None),
-            "VIDEO_ANALYSIS_GEMINI_RAW_RESPONSE",
-            DEFAULT_RAW_RESPONSE_LOG,
-        )
+            )
 
         def validate(payload: dict[str, Any]) -> SemanticAnalysis:
             # Contract-owned fields are authoritative locally; Gemini does not
@@ -205,9 +194,18 @@ class GeminiSemanticProvider:
             payload["duration_seconds"] = duration_seconds
             return SemanticAnalysis.model_validate(payload)
 
-        return parse_json_response(
-            interaction,
-            artifact_name="semantic",
-            raw_path=raw_response_path,
-            validator=validate,
+        # The upload above happens once; every model in the chain reads the
+        # same uploaded file or inline bytes. Each attempt is validated, so an
+        # answer that fails validation moves up to the next model.
+        semantic, self.model_used = run_with_model_fallback(
+            model_chain(self.model, "VIDEO_ANALYSIS_SEMANTIC_MODELS", DEFAULT_SEMANTIC_MODELS),
+            lambda model: call_and_validate(
+                model,
+                call=call,
+                artifact_name="semantic",
+                raw_env_var="VIDEO_ANALYSIS_GEMINI_RAW_RESPONSE",
+                raw_default_name=DEFAULT_RAW_RESPONSE_LOG,
+                validator=validate,
+            ),
         )
+        return semantic

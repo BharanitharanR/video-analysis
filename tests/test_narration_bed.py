@@ -62,12 +62,13 @@ def test_spec_without_voice_has_no_extra():
     assert "extra" not in compile_song_spec(plan())
 
 
-def test_provider_compose_with_fake(monkeypatch):
+def test_provider_compose_with_fake(monkeypatch, tmp_path):
     raw = plan().model_dump()
     monkeypatch.setattr(gem, "create_client", lambda: object())
-    monkeypatch.setattr(gem, "run_with_model_fallback", lambda chain, fn: (SimpleNamespace(output_text=json.dumps(raw)), "fake"))
-    monkeypatch.setattr(gem, "persist_raw_response", lambda *a, **k: None)
-    monkeypatch.setattr(gem, "parse_json_response", lambda i, artifact_name, raw_path, validator: validator(json.loads(i.output_text)))
+    # Fake Gemini call: no network. Validation runs for real.
+    monkeypatch.setattr(gem, "run_background_interaction",
+                        lambda client, **kw: SimpleNamespace(output_text=json.dumps(raw)))
+    monkeypatch.setenv("VIDEO_ANALYSIS_COMPOSITION_RAW_RESPONSE", str(tmp_path / "composition.json"))
     analysis = {"video": {"dimensions": {"technical": {"duration_seconds": 60}}}}
     p = gem.GeminiCompositionProvider().compose(analysis, voice_timeline=TIMELINE)
     assert p.narration_bed and max(s.energy for s in p.sections) <= GAP_ENERGY_CAP
