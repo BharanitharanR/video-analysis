@@ -343,7 +343,7 @@ def run_background_interaction(
     system_instruction: str,
     response_schema: dict[str, Any],
     poll_interval_seconds: float,
-    processing_timeout_seconds: float,
+    processing_timeout_seconds: float | None,
     webhook_config: dict[str, Any] | None = None,
 ) -> Any:
     """Submit a stored background interaction and wait for completion."""
@@ -369,7 +369,7 @@ def run_background_interaction(
             "Gemini background interaction did not return an interaction ID."
         )
 
-    deadline = time.monotonic() + processing_timeout_seconds
+    deadline = None if processing_timeout_seconds is None else time.monotonic() + processing_timeout_seconds
     while True:
         status = str(getattr(interaction, "status", "")).lower()
         if status == "completed":
@@ -379,7 +379,7 @@ def run_background_interaction(
                 f"Gemini interaction {interaction_id} ended with status={status}; "
                 f"errors={getattr(interaction, 'errors', None)}"
             )
-        if time.monotonic() >= deadline:
+        if deadline is not None and time.monotonic() >= deadline:
             raise TimeoutError(
                 f"Gemini interaction {interaction_id} did not complete within "
                 f"{processing_timeout_seconds:.0f} seconds; "

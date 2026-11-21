@@ -22,9 +22,9 @@ from .prompt import SYSTEM_INSTRUCTION, build_semantic_prompt
 
 MAX_INLINE_VIDEO_BYTES = 20 * 1024 * 1024
 DEFAULT_FILE_POLL_INTERVAL_SECONDS = 2.0
-DEFAULT_FILE_PROCESSING_TIMEOUT_SECONDS = 300.0
+DEFAULT_FILE_PROCESSING_TIMEOUT_SECONDS = None  # no limit
 DEFAULT_INTERACTION_POLL_INTERVAL_SECONDS = 5.0
-DEFAULT_INTERACTION_PROCESSING_TIMEOUT_SECONDS = 1800.0
+DEFAULT_INTERACTION_PROCESSING_TIMEOUT_SECONDS = None  # no limit: wait until Gemini answers
 DEFAULT_RAW_RESPONSE_LOG = "gemini-response.raw.json"
 
 
@@ -69,9 +69,9 @@ class GeminiSemanticProvider:
         model: str | None = None,
         *,
         file_poll_interval_seconds: float = DEFAULT_FILE_POLL_INTERVAL_SECONDS,
-        file_processing_timeout_seconds: float = DEFAULT_FILE_PROCESSING_TIMEOUT_SECONDS,
+        file_processing_timeout_seconds: float | None = DEFAULT_FILE_PROCESSING_TIMEOUT_SECONDS,
         interaction_poll_interval_seconds: float = DEFAULT_INTERACTION_POLL_INTERVAL_SECONDS,
-        interaction_processing_timeout_seconds: float = DEFAULT_INTERACTION_PROCESSING_TIMEOUT_SECONDS,
+        interaction_processing_timeout_seconds: float | None = DEFAULT_INTERACTION_PROCESSING_TIMEOUT_SECONDS,
         webhook_url: str | None = None,
     ) -> None:
         # One client per key (GEMINI_API_KEY_1..n, else GEMINI_API_KEY).
@@ -101,7 +101,7 @@ class GeminiSemanticProvider:
         uploaded_file = client.files.upload(file=str(path))
         import time
 
-        deadline = time.monotonic() + self.file_processing_timeout_seconds
+        deadline = None if self.file_processing_timeout_seconds is None else time.monotonic() + self.file_processing_timeout_seconds
 
         while True:
             state = _file_state_name(uploaded_file)
@@ -112,7 +112,7 @@ class GeminiSemanticProvider:
                     f"Gemini Files API failed to process video {path}: "
                     f"state={state}"
                 )
-            if time.monotonic() >= deadline:
+            if deadline is not None and time.monotonic() >= deadline:
                 raise TimeoutError(
                     f"Gemini Files API did not make video active within "
                     f"{self.file_processing_timeout_seconds:.0f} seconds; "

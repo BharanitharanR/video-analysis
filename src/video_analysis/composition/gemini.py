@@ -19,7 +19,7 @@ from .prompt import SYSTEM_INSTRUCTION, build_composition_prompt
 
 DEFAULT_MODEL = None  # the ordered chain in ..gemini decides
 DEFAULT_POLL_INTERVAL_SECONDS = 2.0
-DEFAULT_TIMEOUT_SECONDS = 300.0
+DEFAULT_TIMEOUT_SECONDS = None  # no limit: wait until Gemini answers
 DEFAULT_RAW_RESPONSE_LOG = "composition-response.raw.json"
 
 
@@ -35,7 +35,7 @@ class GeminiCompositionProvider:
         model: str | None = DEFAULT_MODEL,
         *,
         poll_interval_seconds: float = DEFAULT_POLL_INTERVAL_SECONDS,
-        processing_timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+        processing_timeout_seconds: float | None = DEFAULT_TIMEOUT_SECONDS,
     ) -> None:
         # One client per key (GEMINI_API_KEY_1..n, else GEMINI_API_KEY).
         self._clients = create_clients()
