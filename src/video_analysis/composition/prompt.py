@@ -34,14 +34,27 @@ The resulting music should feel composed for this specific video rather than bei
 """
 
 
-def build_composition_prompt(analysis: dict[str, Any]) -> str:
+NARRATION_BED_INSTRUCTION = """NARRATION BED: spoken voiceover will play over this music during the windows listed below.
+Plan a quiet background bed, not a feature track:
+- keep section energy low (0.45 or less) while narration is speaking;
+- sparse texture: soft pads, gentle sustained or plucked low-mid notes, light or no percussion;
+- no busy lead melody and no prominent instruments in the speech range (roughly 200 Hz to 4 kHz) during narration windows;
+- the music may lift slightly in the gaps between lines and at the intro and outro;
+- split sections so the bed follows the speech windows; set narration_bed to true.
+"""
+
+
+def build_composition_prompt(analysis: dict[str, Any], voice_summary: str | None = None) -> str:
     duration = analysis.get("video", {}).get("dimensions", {}).get("technical", {}).get("duration_seconds")
     if duration is None:
         raise ValueError("analysis.json is missing video.dimensions.technical.duration_seconds")
 
-    return "\n\n".join([
+    parts = [
         f"Create an instrumental soundtrack plan for the complete video. Measured duration: {float(duration):.3f} seconds.",
         "Use the following completed analysis.json as your evidence source. Preserve its timeline and meaningful timestamps.",
         "Design music that supports the video's story and audiovisual mood without overpowering important speech or natural sound.",
         json.dumps(analysis, ensure_ascii=False, separators=(",", ":")),
-    ])
+    ]
+    if voice_summary:
+        parts.insert(1, NARRATION_BED_INSTRUCTION + "\n" + voice_summary)
+    return "\n\n".join(parts)

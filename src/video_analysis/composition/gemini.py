@@ -15,6 +15,7 @@ from ..gemini import (
     sanitize_response_schema,
 )
 from .models import CompositionPlan
+from .voice import apply_narration_bed, load_voice_timeline, summarize_voice_timeline
 from .prompt import SYSTEM_INSTRUCTION, build_composition_prompt
 
 DEFAULT_MODEL = "gemini-3.6-flash"
@@ -42,7 +43,7 @@ class GeminiCompositionProvider:
         self.poll_interval_seconds = poll_interval_seconds
         self.processing_timeout_seconds = processing_timeout_seconds
 
-    def compose(self, analysis: dict | str | Path) -> CompositionPlan:
+    def compose(self, analysis: dict | str | Path, voice_timeline: dict | str | Path | None = None) -> CompositionPlan:
         if isinstance(analysis, (str, Path)):
             payload = json.loads(Path(analysis).read_text(encoding="utf-8"))
         else:
@@ -54,7 +55,9 @@ class GeminiCompositionProvider:
                 "analysis.json is missing video.dimensions.technical.duration_seconds"
             )
 
-        prompt = build_composition_prompt(payload)
+        timeline = load_voice_timeline(voice_timeline) if voice_timeline is not None else None
+        voice_summary = summarize_voice_timeline(timeline, float(duration)) if timeline else None
+        prompt = build_composition_prompt(payload, voice_summary)
         interaction, self.model_used = run_with_model_fallback(
             model_chain(self.model, "VIDEO_ANALYSIS_COMPOSITION_MODELS", DEFAULT_COMPOSITION_MODELS),
             lambda model: run_background_interaction(
@@ -79,9 +82,12 @@ class GeminiCompositionProvider:
             result["duration_seconds"] = float(duration)
             return CompositionPlan.model_validate(result)
 
-        return parse_json_response(
+        plan = parse_json_response(
             interaction,
             artifact_name="composition",
             raw_path=raw_path,
             validator=validate,
         )
+        if timeline is not None:
+            apply_narration_bed(plan, timeline)
+        return plan

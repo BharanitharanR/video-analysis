@@ -42,6 +42,9 @@ def main():
     c.add_argument("--gemini-model", default="gemini-3.6-flash",
                    help="Gemini model used for composition planning")
 
+    c.add_argument("--voice-timeline", default=None,
+                   help="voiceover-timeline.json; plans a sparse bed under narration")
+
     args = parser.parse_args()
 
     if args.command == "analyze":
@@ -69,7 +72,7 @@ def main():
 
     elif args.command == "compose":
         provider = GeminiCompositionProvider(model=args.gemini_model)
-        plan = provider.compose(args.analysis)
+        plan = provider.compose(args.analysis, voice_timeline=args.voice_timeline)
         song_spec = compile_song_spec(plan)
         Path(args.output).write_text(
             json.dumps(song_spec, indent=2, ensure_ascii=False) + "\n",
