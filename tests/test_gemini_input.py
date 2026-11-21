@@ -197,7 +197,7 @@ def test_semantic_chain_starts_with_the_baseline_model(monkeypatch):
     monkeypatch.delenv("VIDEO_ANALYSIS_SEMANTIC_MODELS", raising=False)
     monkeypatch.delenv("VIDEO_ANALYSIS_MAX_MODEL_ATTEMPTS", raising=False)
     assert model_chain(None, "VIDEO_ANALYSIS_SEMANTIC_MODELS", DEFAULT_SEMANTIC_MODELS)[:3] == [
-        "gemini-3.8-flash", "gemini-3.6-flash", "gemini-2.5-flash"]
+        "gemini-3.8-flash", "gemini-3.6-flash", "gemini-4-hydrogen"]
     assert DEFAULT_SEMANTIC_MODELS[-1].endswith("flash-lite")
 
 

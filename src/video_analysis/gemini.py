@@ -24,19 +24,18 @@ T = TypeVar("T")
 DEFAULT_SEMANTIC_MODELS = (
     "gemini-3.8-flash",
     "gemini-3.6-flash",
-    "gemini-2.5-flash",
     "gemini-4-hydrogen",
     "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
 )
+# The gemini-2.5 models are left out: they reject background interactions
+# ("does not support background interactions", 2026-11-21).
 DEFAULT_COMPOSITION_MODELS = (
     "gemini-3.8-flash",
     "gemini-3.6-flash",
-    "gemini-2.5-flash",
     "gemini-4-hydrogen",
     "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
-    "gemini-2.5-flash-lite",
 )
 STEP_DEFAULTS = {"analysis": DEFAULT_SEMANTIC_MODELS, "composition": DEFAULT_COMPOSITION_MODELS}
 
@@ -94,8 +93,18 @@ _RETRYABLE_MARKERS = (
 _RETRYABLE_CODES = {429, 500, 502, 503, 504}
 
 
+def is_unsupported_by_model(exc: BaseException) -> bool:
+    """A 400 that is about this model, not the request: for example
+    "Model 'gemini-2.5-flash' does not support background interactions", or a
+    thinking level the model does not take. The next model may accept it."""
+    code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+    text = str(exc).lower()
+    is_400 = code == 400 or "400" in text or "invalid_request" in text or "invalid_argument" in text
+    return is_400 and ("not support" in text or "not supported" in text or "unsupported" in text)
+
+
 def is_retryable_model_error(exc: BaseException) -> bool:
-    if isinstance(exc, InvalidModelResponse):
+    if isinstance(exc, InvalidModelResponse) or is_unsupported_by_model(exc):
         return True
     if isinstance(exc, (TimeoutError, ValueError)):
         return False
@@ -217,6 +226,8 @@ def run_with_key_and_model_fallback(
                 if index + 1 < len(models):
                     if isinstance(exc, InvalidModelResponse):
                         reason = "gave an invalid answer"
+                    elif is_unsupported_by_model(exc):
+                        reason = "does not support this request"
                     elif is_quota_error(exc):
                         reason = "is out of quota on every key" if multi else "unavailable"
                     else:
@@ -345,8 +356,11 @@ def run_background_interaction(
     poll_interval_seconds: float,
     processing_timeout_seconds: float | None,
     webhook_config: dict[str, Any] | None = None,
+    thinking_level: str | None = None,
 ) -> Any:
-    """Submit a stored background interaction and wait for completion."""
+    """Submit a stored background interaction and wait for completion.
+
+    thinking_level None leaves it to Gemini (whose default is "high")."""
     interaction_kwargs: dict[str, Any] = {
         "model": model,
         "input": input_items,
@@ -359,6 +373,8 @@ def run_background_interaction(
         "background": True,
         "store": True,
     }
+    if thinking_level:
+        interaction_kwargs["generation_config"] = {"thinking_level": thinking_level}
     if webhook_config:
         interaction_kwargs["webhook_config"] = webhook_config
 

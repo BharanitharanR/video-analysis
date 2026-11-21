@@ -139,12 +139,15 @@ def _models_command(args) -> int:
         "max_attempts_source": cap_source,
         "key_count": len(api_keys()),
         "steps": steps,
+        "thinking_level": {s: (model_config.thinking_setting(s)[0] or "default") for s in model_config.THINKING_STEPS},
+        "thinking_levels": list(model_config.THINKING_LEVELS),
     }
     if args.json:
         print(json.dumps(report, indent=2))
         return 0
     print(f"Config file: {report['config_path']}" + ("" if report["config_exists"] else " (not created yet)"))
     print(f"Attempt cap: {cap} ({cap_source}); API keys found: {report['key_count']}")
+    print("Thinking level: " + ", ".join(f"{s} {l}" for s, l in report["thinking_level"].items()))
     for step, info in steps.items():
         print(f"\n{info['label']} ({info['source']}):")
         for n, model in enumerate(info["order"], start=1):

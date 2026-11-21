@@ -8,7 +8,8 @@ tried in:
       "analysis":    ["gemini-3.8-flash", "gemini-3.6-flash", ...],
       "composition": ["gemini-3.8-flash", "gemini-3.6-flash", ...],
       "disabled":    {"analysis": ["gemini-4-hydrogen"], "composition": []},
-      "max_attempts": 6
+      "max_attempts": 6,
+      "thinking_level": {"analysis": "low", "composition": "low", "narration": "low"}
     }
 
 "disabled" only remembers models switched off in the studio window; they are
@@ -46,6 +47,15 @@ STEP_ENV = {
 }
 ENV_STEP = {env: step for step, env in STEP_ENV.items()}
 STEP_LABEL = {"analysis": "Video analysis", "composition": "Music plan"}
+
+# How hard Gemini thinks before answering. Gemini's own default is "high",
+# which made each call take 10 to 25 minutes on a 3-minute demo
+# (2026-11-21); describing a video in a fixed JSON shape does not need it.
+# "default" sends nothing and leaves it to Gemini.
+THINKING_LEVELS = ("minimal", "low", "medium", "high", "xhigh", "default")
+THINKING_STEPS = ("analysis", "composition", "narration")
+DEFAULT_THINKING_LEVEL = "low"
+THINKING_ENV = "VIDEO_ANALYSIS_THINKING_LEVEL"
 
 MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 MAX_ATTEMPTS_LIMIT = 50
@@ -92,6 +102,18 @@ def validate(data: Any) -> dict[str, Any]:
             disabled[step] = off
     if disabled:
         clean["disabled"] = disabled
+    if "thinking_level" in data:
+        levels = data["thinking_level"]
+        if not isinstance(levels, dict):
+            raise ModelConfigError('"thinking_level" must be an object, e.g. {"analysis": "low"}')
+        clean_levels = {}
+        for step, level in levels.items():
+            if step not in THINKING_STEPS:
+                raise ModelConfigError(f'"thinking_level" has an unknown step: {step!r}')
+            if level not in THINKING_LEVELS:
+                raise ModelConfigError(f'"thinking_level.{step}" must be one of {", ".join(THINKING_LEVELS)}')
+            clean_levels[step] = level
+        clean["thinking_level"] = clean_levels
     if "max_attempts" in data:
         cap = data["max_attempts"]
         if isinstance(cap, bool) or not isinstance(cap, int) or not 1 <= cap <= MAX_ATTEMPTS_LIMIT:
@@ -157,3 +179,18 @@ def max_attempts_setting(default: int) -> tuple[int, str]:
     if config and "max_attempts" in config:
         return config["max_attempts"], f"config file {config_path()}"
     return default, "built-in default"
+
+
+def thinking_setting(step: str) -> tuple[str | None, str]:
+    """(level to send, or None for Gemini's own default; where it came from)."""
+    env = (os.environ.get(THINKING_ENV) or "").strip().lower()
+    if env:
+        if env not in THINKING_LEVELS:
+            raise ModelConfigError(f"{THINKING_ENV} must be one of {', '.join(THINKING_LEVELS)}")
+        level, source = env, f"environment variable {THINKING_ENV}"
+    else:
+        config = load() or {}
+        level = config.get("thinking_level", {}).get(step)
+        source = f"config file {config_path()}" if level else "built-in default"
+        level = level or DEFAULT_THINKING_LEVEL
+    return (None if level == "default" else level), source

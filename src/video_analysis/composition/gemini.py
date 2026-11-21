@@ -6,6 +6,7 @@ from pathlib import Path
 
 from ..gemini import (
     DEFAULT_COMPOSITION_MODELS,
+    _stderr,
     call_and_validate,
     create_clients,
     model_chain,
@@ -13,6 +14,7 @@ from ..gemini import (
     run_with_key_and_model_fallback,
     sanitize_response_schema,
 )
+from .. import model_config
 from .models import CompositionPlan
 from .voice import apply_narration_bed, load_voice_timeline, summarize_voice_timeline
 from .prompt import SYSTEM_INSTRUCTION, build_composition_prompt
@@ -61,6 +63,9 @@ class GeminiCompositionProvider:
         prompt = build_composition_prompt(payload, voice_summary)
         clients = list(getattr(self, "_clients", None) or [self._client])
 
+        thinking, thinking_source = model_config.thinking_setting("composition")
+        _stderr(f"Gemini thinking level for Music plan: {thinking or 'Gemini default'} ({thinking_source})")
+
         def call(model: str, key: int):
             return run_background_interaction(
                 clients[key],
@@ -70,6 +75,7 @@ class GeminiCompositionProvider:
                 response_schema=_schema(),
                 poll_interval_seconds=self.poll_interval_seconds,
                 processing_timeout_seconds=self.processing_timeout_seconds,
+                thinking_level=thinking,
             )
 
         def validate(result: dict) -> CompositionPlan:

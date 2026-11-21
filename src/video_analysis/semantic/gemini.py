@@ -9,6 +9,7 @@ from typing import Any
 
 from ..gemini import (
     DEFAULT_SEMANTIC_MODELS,
+    _stderr,
     call_and_validate,
     create_clients,
     model_chain,
@@ -16,6 +17,7 @@ from ..gemini import (
     run_with_key_and_model_fallback,
     sanitize_response_schema,
 )
+from .. import model_config
 from ..gemini_input import copy_enabled, make_gemini_copy
 from .models import SemanticAnalysis
 from .prompt import SYSTEM_INSTRUCTION, build_semantic_prompt
@@ -191,6 +193,9 @@ class GeminiSemanticProvider:
                 },
             }
 
+        thinking, thinking_source = model_config.thinking_setting("analysis")
+        _stderr(f"Gemini thinking level for Video analysis: {thinking or 'Gemini default'} ({thinking_source})")
+
         def call(model: str, key: int) -> Any:
             return run_background_interaction(
                 clients[key],
@@ -204,6 +209,7 @@ class GeminiSemanticProvider:
                 poll_interval_seconds=self.interaction_poll_interval_seconds,
                 processing_timeout_seconds=self.interaction_processing_timeout_seconds,
                 webhook_config=webhook_config,
+                thinking_level=thinking,
             )
 
         def validate(payload: dict[str, Any]) -> SemanticAnalysis:
