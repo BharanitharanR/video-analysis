@@ -221,3 +221,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local Gemini/analysis outputs
+gemini-response.raw.json
+gemini-response.json
+semantic.json
+deterministic.json
