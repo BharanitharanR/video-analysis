@@ -197,6 +197,23 @@ the music evolve with the video.
 
 The generated `song-spec.json` is intentionally compatible with the existing
 text-to-compose contract rather than introducing another audio-generation system.
+## Narration bed
+
+When a voiceover will play over the score, pass its timeline so the music sits
+underneath it:
+
+```bash
+video-analysis compose analysis.json --voice-timeline voiceover-timeline.json -o song-spec.json
+```
+
+The timeline's lines are merged into narration windows (start, end, speaker) and the
+speaking share of the video, and both go into the composition prompt. Gemini is asked
+for a sparse, low-energy bed with nothing prominent in roughly 200 Hz to 4 kHz during
+speech, lifting slightly in gaps and at the intro and outro. After Gemini answers, code
+sets `narration_bed: true` and caps section energy at 0.45 for sections that overlap
+speech and 0.60 for the others. The SongSpec gets `extra.narration_bed: true` and a
+`narration-bed` tag. Without `--voice-timeline` nothing changes.
+
 ## Model fallback
 
 Both Gemini steps (`analyze --semantic gemini` and `compose`) try the requested

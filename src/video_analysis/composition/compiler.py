@@ -32,7 +32,7 @@ def compile_song_spec(plan: CompositionPlan | dict[str, Any]) -> dict[str, Any]:
             "transition": section.transition,
         })
 
-    return {
+    spec = {
         "song_spec_version": "1.0",
         "metadata": {
             "title": plan.title,
@@ -70,3 +70,7 @@ def compile_song_spec(plan: CompositionPlan | dict[str, Any]) -> dict[str, Any]:
             "requested_capabilities": ["instrumental", "full_duration", "original_music"],
         },
     }
+    if plan.narration_bed:
+        spec["metadata"]["tags"].append("narration-bed")
+        spec["extra"] = {"narration_bed": True}
+    return spec

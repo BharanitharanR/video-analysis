@@ -43,6 +43,9 @@ class CompositionPlan(StrictModel):
     ending: str = Field(min_length=1, max_length=500)
     instruments: list[str] = Field(default_factory=list, max_length=16)
     sections: list[CompositionSection] = Field(min_length=1, max_length=100)
+    # True when the music is a soft bed under spoken voiceover. Set in code
+    # when a voice timeline is supplied, not trusted from the model.
+    narration_bed: bool = False
 
     @model_validator(mode="after")
     def validate_plan(self):
