@@ -11,7 +11,7 @@ from video_analysis.semantic.gemini import GeminiSemanticProvider, _gemini_respo
 
 def valid_semantic():
     return {
-        "schema_version": "0.2",
+        "schema_version": "0.3",
         "analysis_type": "semantic",
         "duration_seconds": 5.0,
         "overall_mood": "curious",
@@ -266,3 +266,21 @@ def test_gemini_background_interaction_uses_webhook(monkeypatch, tmp_path):
     assert kwargs["store"] is True
     assert kwargs["webhook_config"]["uris"] == ["https://example.test/gemini-webhook"]
     assert kwargs["webhook_config"]["user_metadata"]["analysis_type"] == "semantic"
+
+
+def test_video_type_defaults_when_missing():
+    s = SemanticAnalysis.model_validate(valid_semantic())
+    assert s.video_type.primary == "unknown"
+    assert s.video_type.confidence == 0.0
+    assert s.video_type.alternatives == []
+    assert s.screen_actions == []
+
+
+def test_screen_actions_validate():
+    payload = valid_semantic()
+    payload["screen_actions"] = [{"timestamp_seconds": 2.0, "action": "click", "target": "Save"}]
+    s = SemanticAnalysis.model_validate(payload)
+    assert s.screen_actions[0].visible_text == ""
+    payload["screen_actions"][0]["timestamp_seconds"] = 99
+    with pytest.raises(ValidationError):
+        SemanticAnalysis.model_validate(payload)

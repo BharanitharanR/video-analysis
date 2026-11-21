@@ -23,7 +23,7 @@ def deterministic_artifact():
 
 def semantic_artifact():
     return {
-        "schema_version": "0.2",
+        "schema_version": "0.3",
         "analysis_type": "semantic",
         "duration_seconds": 87.0,
         "overall_mood": "joyful",
@@ -95,3 +95,16 @@ def test_merge_rejects_invalid_semantic_artifact(tmp_path):
 
     with pytest.raises(Exception):
         merge_analysis_artifacts(deterministic_path, semantic_path)
+
+
+def test_merge_copies_video_type_to_dimensions():
+    from video_analysis.semantic.models import SemanticAnalysis
+    from video_analysis.semantic.merge import merge_semantic_analysis
+    from tests.test_semantic_models import valid_semantic
+    payload = valid_semantic()
+    payload["video_type"] = {"primary": "demo", "confidence": 0.9}
+    det = {"video": {"dimensions": {"technical": {"duration_seconds": 5.0}}}}
+    out = merge_semantic_analysis(det, SemanticAnalysis.model_validate(payload))
+    dims = out["video"]["dimensions"]
+    assert dims["video_type"] is dims["semantic"]["video_type"]
+    assert dims["video_type"]["primary"] == "demo"

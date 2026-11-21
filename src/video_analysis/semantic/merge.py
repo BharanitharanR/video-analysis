@@ -18,13 +18,17 @@ def merge_semantic_analysis(
         semantic if isinstance(semantic, SemanticAnalysis)
         else SemanticAnalysis.model_validate(semantic)
     )
+    semantic_json = semantic_model.model_dump(mode="json")
     result = {
         **deterministic_report,
         "video": {
             **deterministic_report["video"],
             "dimensions": {
                 **deterministic_report["video"].get("dimensions", {}),
-                "semantic": semantic_model.model_dump(mode="json"),
+                "semantic": semantic_json,
+                # Same object, so downstream skills can read the type from
+                # either location without it drifting.
+                "video_type": semantic_json["video_type"],
             },
         },
     }

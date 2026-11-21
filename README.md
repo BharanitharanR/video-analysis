@@ -15,11 +15,18 @@ The skill has two independent analysis paths:
    observations and events.
 
 The AI artifact is validated independently and then merged under
-`video.dimensions.semantic`. It also classifies overall content type under
-`video.dimensions.video_type` (demo, tutorial, walkthrough, presentation, vlog,
+`video.dimensions.semantic`. It also classifies overall content type at
+`video.dimensions.semantic.video_type`, copied to `video.dimensions.video_type`
+as `{primary, confidence, alternatives:[{type, confidence}], reason}`. A missing
+classification reads as primary `unknown`, confidence 0. Types include (demo, tutorial, walkthrough, presentation, vlog,
 gameplay, meeting, review, real-world footage, and more). This is distinct from
 visual mode in individual timeline segments, such as `screen_recording` or
 `real_world`. AI never overwrites deterministic dimensions.
+
+For demo, tutorial, walkthrough and screen-recording content the same semantic
+call also fills `video.dimensions.semantic.screen_actions`, a list of
+`{timestamp_seconds, action, target, visible_text, result}` (strings may be
+empty). For other video types it stays empty.
 
 ## Install
 

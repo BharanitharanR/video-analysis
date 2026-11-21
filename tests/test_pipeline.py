@@ -30,7 +30,7 @@ class FakeSemanticProvider:
     def analyze(self, video_path, duration_seconds, evidence=None):
         self.calls.append((video_path, duration_seconds, evidence))
         return SemanticAnalysis.model_validate({
-            "schema_version": "0.2",
+            "schema_version": "0.3",
             "analysis_type": "semantic",
             "duration_seconds": duration_seconds,
             "overall_mood": "happy",
