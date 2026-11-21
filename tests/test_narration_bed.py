@@ -64,7 +64,7 @@ def test_spec_without_voice_has_no_extra():
 
 def test_provider_compose_with_fake(monkeypatch, tmp_path):
     raw = plan().model_dump()
-    monkeypatch.setattr(gem, "create_client", lambda: object())
+    monkeypatch.setattr(gem, "create_clients", lambda: [object()])
     # Fake Gemini call: no network. Validation runs for real.
     monkeypatch.setattr(gem, "run_background_interaction",
                         lambda client, **kw: SimpleNamespace(output_text=json.dumps(raw)))

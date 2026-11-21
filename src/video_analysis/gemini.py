@@ -11,37 +11,67 @@ from typing import Any, Callable, Iterable, TypeVar
 
 T = TypeVar("T")
 
-# Model order: start small, go big. The cheapest models with the most free
-# quota go first; larger models are tried only when a smaller one fails with
-# a quota, rate-limit or server error. Free-tier quota per the AI Studio
-# rate-limit page (2026-11-20): Flash-Lite models 15 RPM / 500 RPD, the
-# others 5 RPM / 20 RPD. gemini-4-hydrogen has the least headroom, so it is
-# last. With the default cap of 3 attempts only the first three are tried;
-# raise VIDEO_ANALYSIS_MAX_MODEL_ATTEMPTS to reach further.
+# Model order: strongest first. Flash-Lite answers were too weak for demo
+# narration (2026-11-21), so the best model goes first and several API keys
+# (see api_keys) are used to get past its small free quota: a quota error
+# tries the same model on the next key; only when every key is out of quota,
+# or the model fails in a way another key cannot fix, does the chain step
+# down to the next model. Free-tier quota per the AI Studio rate-limit page
+# (2026-11-20): Flash-Lite 15 RPM / 500 RPD, the others 5 RPM / 20 RPD.
 DEFAULT_SEMANTIC_MODELS = (
-    "gemini-3.5-flash-lite",
-    "gemini-2.5-flash",
+    "gemini-4-hydrogen",
     "gemini-3.8-flash",
     "gemini-3.6-flash",
-    "gemini-4-hydrogen",
+    "gemini-2.5-flash",
+    "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
 )
 DEFAULT_COMPOSITION_MODELS = (
-    "gemini-3.5-flash-lite",
-    "gemini-2.5-flash",
-    "gemini-3.6-flash",
-    "gemini-3.8-flash",
     "gemini-4-hydrogen",
+    "gemini-3.8-flash",
+    "gemini-3.6-flash",
+    "gemini-2.5-flash",
+    "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
     "gemini-2.5-flash-lite",
 )
+
+# Most Gemini attempts (model x key) per step, whatever the mix. Every
+# attempt may be a paid call. VIDEO_ANALYSIS_MAX_MODEL_ATTEMPTS overrides.
+DEFAULT_MAX_ATTEMPTS = 6
+
+# Keys: GEMINI_API_KEY_1 .. GEMINI_API_KEY_<n>, tried in that order; when
+# none is set, GEMINI_API_KEY alone. Keys are never logged; logs say "key 2/5".
+MAX_NUMBERED_KEYS = 20
+
+
+def api_keys() -> list[str]:
+    """The Gemini API keys to rotate through, in order, without repeats.
+
+    A key only helps with quota if it belongs to a different Google Cloud
+    project: quota is counted per project, not per key.
+    """
+    keys: list[str] = []
+    for n in range(1, MAX_NUMBERED_KEYS + 1):
+        value = (os.environ.get(f"GEMINI_API_KEY_{n}") or "").strip()
+        if value and value not in keys:
+            keys.append(value)
+    if not keys:
+        single = (os.environ.get("GEMINI_API_KEY") or "").strip()
+        if single:
+            keys.append(single)
+    return keys
+
+
+def max_attempts() -> int:
+    return max(1, int(os.environ.get("VIDEO_ANALYSIS_MAX_MODEL_ATTEMPTS", str(DEFAULT_MAX_ATTEMPTS))))
 
 class InvalidModelResponse(ValueError):
     """Gemini answered, but the answer is empty, not JSON, or fails our
     validation (for example a timestamp past the end of the video).
 
-    This is a fault of that model's answer, not of the request, so the chain
-    moves up to the next, larger model. It subclasses ValueError so callers
+    This is a fault of that model's answer, not of the request or the key,
+    so the chain moves on to the next model. It subclasses ValueError so callers
     that already catch ValueError keep working.
     """
 
@@ -72,6 +102,24 @@ def is_retryable_model_error(exc: BaseException) -> bool:
     )
 
 
+_QUOTA_MARKERS = ("RESOURCE_EXHAUSTED", "QUOTA", "RATE LIMIT", "TOO MANY REQUESTS")
+
+
+def is_quota_error(exc: BaseException) -> bool:
+    """Quota or rate limit: the one failure another key (project) can fix.
+
+    Server errors, timeouts and invalid answers are not: the next key would
+    hit the same model with the same request, so those step down a model.
+    """
+    if isinstance(exc, (InvalidModelResponse, TimeoutError, ValueError)):
+        return False
+    code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+    if code == 429:
+        return True
+    text = str(exc).upper()
+    return any(marker in text for marker in _QUOTA_MARKERS) or " 429" in text or "429 " in text
+
+
 def model_chain(primary: str | None, env_var: str, defaults: Iterable[str]) -> list[str]:
     """The requested model (if any) first, then the fallbacks, without repeats.
 
@@ -81,9 +129,10 @@ def model_chain(primary: str | None, env_var: str, defaults: Iterable[str]) -> l
     The fallbacks come from `env_var` (comma-separated) when set, else
     `defaults`. VIDEO_ANALYSIS_MODEL_FALLBACK=0 turns fallback off.
 
-    At most VIDEO_ANALYSIS_MAX_MODEL_ATTEMPTS models (default 3) are tried:
-    when the input itself is what makes Gemini fail, every model fails, and
-    each attempt is a paid call.
+    The chain is cut at VIDEO_ANALYSIS_MAX_MODEL_ATTEMPTS (default 6), the
+    same cap that bounds total attempts across models and keys: when the
+    input itself is what makes Gemini fail, every model fails, and each
+    attempt may be a paid call.
     """
     configured_chain = os.environ.get(env_var)
     if os.environ.get("VIDEO_ANALYSIS_MODEL_FALLBACK", "1").strip() == "0":
@@ -97,44 +146,95 @@ def model_chain(primary: str | None, env_var: str, defaults: Iterable[str]) -> l
     for model in [primary, *rest]:
         if model and model not in chain:
             chain.append(model)
-    limit = max(1, int(os.environ.get("VIDEO_ANALYSIS_MAX_MODEL_ATTEMPTS", "3")))
-    return chain[:limit]
+    return chain[:max_attempts()]
+
+
+def _stderr(message: str) -> None:
+    print(message, file=sys.stderr, flush=True)
+
+
+def run_with_key_and_model_fallback(
+    models: list[str],
+    attempt: Callable[[str, int], T],
+    *,
+    key_count: int,
+    log: Callable[[str], None] = _stderr,
+    limit: int | None = None,
+) -> tuple[T, str, int]:
+    """Try each model on each key, in that order, until one attempt succeeds.
+
+    For each model, keys 1..key_count are tried in turn, but only a quota or
+    rate-limit error moves to the next key. Any other retryable failure
+    (server error, DEADLINE_EXCEEDED, an answer that fails validation) steps
+    down to the next model, starting again from key 1. Errors that are not
+    retryable are raised at once. At most `limit` attempts are made in all
+    (default VIDEO_ANALYSIS_MAX_MODEL_ATTEMPTS, 6).
+
+    `attempt(model, key_index)` should call Gemini and validate the answer
+    (see call_and_validate). Returns (result, model_used, key_index_used).
+    """
+    key_count = max(1, key_count)
+    limit = max_attempts() if limit is None else limit
+    multi = key_count > 1
+    label = (lambda k: f" (key {k + 1}/{key_count})") if multi else (lambda k: "")
+    failures: list[str] = []
+    last_exc: BaseException | None = None
+    attempts = 0
+    for index, model in enumerate(models):
+        key = 0
+        while key < key_count:
+            if attempts >= limit:
+                failures.append(f"stopped at the cap of {limit} attempts")
+                raise RuntimeError(
+                    "Every Gemini model in the fallback chain failed: " + " | ".join(failures)
+                ) from last_exc
+            attempts += 1
+            try:
+                result = attempt(model, key)
+            except Exception as exc:  # noqa: BLE001 - classified below
+                if not is_retryable_model_error(exc):
+                    raise
+                last_exc = exc
+                summary = " ".join(_describe(exc).split())[:300]
+                failures.append(f"{model}{label(key)}: {summary}")
+                if is_quota_error(exc) and key + 1 < key_count:
+                    log(f"Gemini model {model}{label(key)} out of quota ({summary}); "
+                        f"trying key {key + 2}/{key_count}")
+                    key += 1
+                    continue
+                if index + 1 < len(models):
+                    if isinstance(exc, InvalidModelResponse):
+                        reason = "gave an invalid answer"
+                    elif is_quota_error(exc):
+                        reason = "is out of quota on every key" if multi else "unavailable"
+                    else:
+                        reason = "unavailable"
+                    log(f"Gemini model {model}{label(key)} {reason} ({summary}); "
+                        f"trying {models[index + 1]}" + (" from key 1" if multi else ""))
+                break
+            else:
+                log(f"Gemini model used: {model}{label(key)}")
+                return result, model, key
+    raise RuntimeError(
+        "Every Gemini model in the fallback chain failed: " + " | ".join(failures)
+    ) from last_exc
 
 
 def run_with_model_fallback(
     models: list[str],
     attempt: Callable[[str], T],
     *,
-    log: Callable[[str], None] = lambda message: print(message, file=sys.stderr, flush=True),
+    log: Callable[[str], None] = _stderr,
 ) -> tuple[T, str]:
-    """Call `attempt(model)` down the chain until one model succeeds.
+    """Single-key form: call `attempt(model)` down the chain, one try each.
 
-    Each model is tried once. Moves on for quota, rate-limit and server
-    errors, and for an answer that fails validation (InvalidModelResponse),
-    so `attempt` should both call Gemini and validate the answer (see
-    call_and_validate). The chain length (model_chain's cap) bounds the
-    number of paid calls either way. Returns (result, model_used).
+    Moves on for quota, rate-limit and server errors, and for an answer that
+    fails validation. Returns (result, model_used).
     """
-    failures: list[str] = []
-    last_exc: BaseException | None = None
-    for index, model in enumerate(models):
-        try:
-            result = attempt(model)
-        except Exception as exc:  # noqa: BLE001 - classified below
-            if not is_retryable_model_error(exc):
-                raise
-            last_exc = exc
-            summary = " ".join(_describe(exc).split())[:300]
-            failures.append(f"{model}: {summary}")
-            if index + 1 < len(models):
-                reason = "gave an invalid answer" if isinstance(exc, InvalidModelResponse) else "unavailable"
-                log(f"Gemini model {model} {reason} ({summary}); trying {models[index + 1]}")
-            continue
-        log(f"Gemini model used: {model}")
-        return result, model
-    raise RuntimeError(
-        "Every Gemini model in the fallback chain failed: " + " | ".join(failures)
-    ) from last_exc
+    result, model, _ = run_with_key_and_model_fallback(
+        models, lambda model, _key: attempt(model), key_count=1, log=log, limit=len(models)
+    )
+    return result, model
 
 
 def _describe(exc: BaseException) -> str:
@@ -166,8 +266,8 @@ def call_and_validate(
 ) -> T:
     """One model attempt: call Gemini, save the raw answer, validate it.
 
-    Used as the `attempt` for run_with_model_fallback, so an answer that
-    fails validation moves the chain up a model. A rejected answer is also
+    Used inside the `attempt` for run_with_key_and_model_fallback, so an
+    answer that fails validation moves the chain to the next model. A rejected answer is also
     kept under rejected_response_path for inspection.
     """
     interaction = call(model)
@@ -182,15 +282,27 @@ def call_and_validate(
         raise
 
 
-def create_client() -> Any:
-    """Create the shared google-genai client using GEMINI_API_KEY."""
+def create_client(api_key: str | None = None) -> Any:
+    """Create a google-genai client for one key.
+
+    The key is passed explicitly, so a GOOGLE_API_KEY in the environment can
+    never take precedence over the configured Gemini keys.
+    """
     try:
         from google import genai
     except ImportError as exc:
         raise RuntimeError(
             "Gemini support is optional. Install video-analysis[gemini]."
         ) from exc
-    return genai.Client()
+    return genai.Client(api_key=api_key) if api_key else genai.Client()
+
+
+def create_clients() -> list[Any]:
+    """One client per key from api_keys(), in rotation order."""
+    keys = api_keys()
+    if not keys:
+        raise RuntimeError("Set GEMINI_API_KEY, or GEMINI_API_KEY_1 .. GEMINI_API_KEY_<n>")
+    return [create_client(key) for key in keys]
 
 
 def sanitize_response_schema(model_schema: dict[str, Any]) -> dict[str, Any]:

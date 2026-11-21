@@ -232,36 +232,62 @@ sets `narration_bed: true` and caps section energy at 0.45 for sections that ove
 speech and 0.60 for the others. The SongSpec gets `extra.narration_bed: true` and a
 `narration-bed` tag. Without `--voice-timeline` nothing changes.
 
-## Model fallback
+## Model fallback and multiple API keys
 
-Both Gemini steps (`analyze --semantic gemini` and `compose`) start small and go
-big: the cheapest model with the most free quota goes first. `--gemini-model` has
-no default; pass it only to force a specific model to the front. The next model
-in the chain is tried when:
+Both Gemini steps (`analyze --semantic gemini` and `compose`) start with the
+strongest model and use several API keys to get past its small free quota.
+`--gemini-model` has no default; pass it only to force a specific model to the
+front.
 
-- Gemini answers with a quota, rate-limit or server error (`429`,
-  `RESOURCE_EXHAUSTED`, `INTERNAL`, `UNAVAILABLE`, ...), or
-- Gemini answers, but the answer is empty, not JSON, or fails local validation
-  (for example an event timed after the end of the video). Each model's answer
-  is validated inside its own attempt, so a weak answer from a small model
-  moves up to a bigger one instead of failing the step.
+Keys come from `GEMINI_API_KEY_1`, `GEMINI_API_KEY_2`, ... in that order
+(repeats are ignored); when none is set, `GEMINI_API_KEY` alone. Each key gets
+its own client with the key passed explicitly, so a `GOOGLE_API_KEY` in the
+environment is never used instead. A second key only helps with quota when it
+belongs to a different Google Cloud project, since quota is counted per
+project.
 
-Bad input and timeouts are not retried. Every attempt is a paid call, and the
-attempt cap below bounds them either way. The model that answered is printed
-to stderr as `Gemini model used: <model>`; a rejected answer is logged as
-`Gemini model <model> gave an invalid answer (...); trying <next>` and kept
-beside the raw response as `<raw>.<model>.rejected.json` (for example
-`gemini-response.gemini-3.5-flash-lite.rejected.json`).
+The order of attempts:
+
+1. The first model on key 1.
+2. A quota or rate-limit error (`429`, `RESOURCE_EXHAUSTED`) tries the **same
+   model on the next key**.
+3. When every key is out of quota for that model, or the model fails in a way
+   another key cannot fix (a server error such as `INTERNAL` or
+   `UNAVAILABLE`, `DEADLINE_EXCEEDED`, or an answer that is empty, not JSON,
+   or fails local validation), the **next model** is tried, starting again
+   from key 1.
+4. At most `VIDEO_ANALYSIS_MAX_MODEL_ATTEMPTS` attempts (default **6**) are
+   made in all, across models and keys. Every attempt may be a paid call.
+
+Bad input and our own wait running out (`TimeoutError`) stop the step at
+once. With five keys the default cap of 6 means: the strongest model on up to
+five keys, then the second model on key 1.
+
+Large videos sent through the Files API are uploaded once per key actually
+used, since an upload belongs to its key's project. Inline videos (up to
+20 MiB, such as the 720p copy) need no upload.
+
+Logs name keys by number, never by value:
+
+```
+Gemini model gemini-4-hydrogen (key 1/5) out of quota (...); trying key 2/5
+Gemini model gemini-4-hydrogen (key 5/5) is out of quota on every key (...); trying gemini-3.8-flash from key 1
+Gemini model used: gemini-3.8-flash (key 1/5)
+```
+
+A rejected answer is logged as `... gave an invalid answer (...)` and kept
+beside the raw response as `<raw>.<model>.rejected.json`.
 
 | Variable | Effect |
 |---|---|
-| `VIDEO_ANALYSIS_SEMANTIC_MODELS` | comma-separated fallbacks for video analysis |
-| `VIDEO_ANALYSIS_COMPOSITION_MODELS` | comma-separated fallbacks for composition |
-| `VIDEO_ANALYSIS_MAX_MODEL_ATTEMPTS` | most models tried per step (default 3; each try is a paid call) |
+| `GEMINI_API_KEY_1` .. `GEMINI_API_KEY_<n>` | keys to rotate through, in order |
+| `GEMINI_API_KEY` | the single key, used when no numbered key is set |
+| `VIDEO_ANALYSIS_SEMANTIC_MODELS` | comma-separated model chain for video analysis |
+| `VIDEO_ANALYSIS_COMPOSITION_MODELS` | comma-separated model chain for composition |
+| `VIDEO_ANALYSIS_MAX_MODEL_ATTEMPTS` | most attempts per step across models and keys (default 6) |
 | `VIDEO_ANALYSIS_MODEL_FALLBACK=0` | use only the requested model, or the first of the chain |
 
-Default chains, cheapest first (free-tier quota per the AI Studio rate-limit
-page, 2026-11-20). With the default cap of 3, only the first three are tried:
+Default chains, strongest first:
 
-- analysis: gemini-3.5-flash-lite, gemini-2.5-flash, gemini-3.8-flash, gemini-3.6-flash, gemini-4-hydrogen, gemini-3.1-flash-lite
-- composition: gemini-3.5-flash-lite, gemini-2.5-flash, gemini-3.6-flash, gemini-3.8-flash, gemini-4-hydrogen, gemini-3.1-flash-lite, gemini-2.5-flash-lite
+- analysis: gemini-4-hydrogen, gemini-3.8-flash, gemini-3.6-flash, gemini-2.5-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite
+- composition: gemini-4-hydrogen, gemini-3.8-flash, gemini-3.6-flash, gemini-2.5-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite, gemini-2.5-flash-lite

@@ -19,6 +19,8 @@ from video_analysis.gemini import (
 from video_analysis.semantic.gemini import GeminiSemanticProvider
 
 DURATION = 173.04
+CHAIN = ("gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-3.8-flash",
+         "gemini-3.6-flash", "gemini-4-hydrogen")
 
 
 def semantic_answer(event_start, event_end):
@@ -69,6 +71,8 @@ def video(tmp_path, monkeypatch):
                  "VIDEO_ANALYSIS_MODEL_FALLBACK"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("VIDEO_ANALYSIS_GEMINI_RAW_RESPONSE", str(tmp_path / "gemini-response.json"))
+    # Pin the chain: these tests are about escalation, not the default order.
+    monkeypatch.setenv("VIDEO_ANALYSIS_SEMANTIC_MODELS", ",".join(CHAIN))
     path = tmp_path / "input.mp4"
     path.write_bytes(b"not really a video; the fake never reads it")
     return path
@@ -109,15 +113,15 @@ def test_a_valid_first_answer_makes_exactly_one_call(video):
     assert provider._client.interactions.models == ["gemini-3.5-flash-lite"]
 
 
-def test_invalid_answers_never_exceed_the_attempt_cap(video):
-    bad = {m: OUT_OF_RANGE for m in ("gemini-3.5-flash-lite", "gemini-2.5-flash",
-                                     "gemini-3.8-flash", "gemini-3.6-flash", "gemini-4-hydrogen")}
+def test_invalid_answers_never_exceed_the_attempt_cap(video, monkeypatch):
+    monkeypatch.setenv("VIDEO_ANALYSIS_MAX_MODEL_ATTEMPTS", "3")
+    bad = {m: OUT_OF_RANGE for m in CHAIN}
     provider = semantic_provider(bad)
 
     with pytest.raises(RuntimeError, match="Every Gemini model") as info:
         provider.analyze(video, duration_seconds=DURATION)
 
-    assert len(provider._client.interactions.models) == 3  # the default cap
+    assert len(provider._client.interactions.models) == 3  # the cap
     assert "gemini-4-hydrogen" not in provider._client.interactions.models
     assert "event exceeds video duration" in str(info.value)
     assert isinstance(info.value.__cause__, InvalidModelResponse)
@@ -162,7 +166,8 @@ def test_composition_also_moves_up_on_an_invalid_answer(monkeypatch, tmp_path):
                  "VIDEO_ANALYSIS_MODEL_FALLBACK"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("VIDEO_ANALYSIS_COMPOSITION_RAW_RESPONSE", str(tmp_path / "composition.json"))
-    monkeypatch.setattr(composition_gemini, "create_client", lambda: object())
+    monkeypatch.setenv("VIDEO_ANALYSIS_COMPOSITION_MODELS", ",".join(CHAIN))
+    monkeypatch.setattr(composition_gemini, "create_clients", lambda: [object()])
 
     valid_plan = {"duration_seconds": 60.0, "world": "w", "style": "bold", "tempo_bpm": 100,
                   "time_signature": [4, 4], "ending": "e",

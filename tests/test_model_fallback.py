@@ -59,6 +59,8 @@ def test_chain_puts_requested_model_first_without_repeats(monkeypatch):
     monkeypatch.delenv("VIDEO_ANALYSIS_MODEL_FALLBACK", raising=False)
     monkeypatch.delenv("X_MODELS", raising=False)
     monkeypatch.delenv("VIDEO_ANALYSIS_MAX_MODEL_ATTEMPTS", raising=False)
+    assert model_chain("b", "X_MODELS", ["a", "b", "c", "d", "e"]) == ["b", "a", "c", "d", "e"]
+    monkeypatch.setenv("VIDEO_ANALYSIS_MAX_MODEL_ATTEMPTS", "3")
     assert model_chain("b", "X_MODELS", ["a", "b", "c", "d", "e"]) == ["b", "a", "c"]
     monkeypatch.setenv("VIDEO_ANALYSIS_MAX_MODEL_ATTEMPTS", "5")
     assert model_chain("b", "X_MODELS", ["a", "b", "c", "d", "e"]) == ["b", "a", "c", "d", "e"]

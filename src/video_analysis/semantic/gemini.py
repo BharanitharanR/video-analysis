@@ -10,10 +10,10 @@ from typing import Any
 from ..gemini import (
     DEFAULT_SEMANTIC_MODELS,
     call_and_validate,
-    create_client,
+    create_clients,
     model_chain,
     run_background_interaction,
-    run_with_model_fallback,
+    run_with_key_and_model_fallback,
     sanitize_response_schema,
 )
 from ..gemini_input import copy_enabled, make_gemini_copy
@@ -74,7 +74,9 @@ class GeminiSemanticProvider:
         interaction_processing_timeout_seconds: float = DEFAULT_INTERACTION_PROCESSING_TIMEOUT_SECONDS,
         webhook_url: str | None = None,
     ) -> None:
-        self._client = create_client()
+        # One client per key (GEMINI_API_KEY_1..n, else GEMINI_API_KEY).
+        self._clients = create_clients()
+        self._client = self._clients[0]
         self.model = model
         self.file_poll_interval_seconds = file_poll_interval_seconds
         self.file_processing_timeout_seconds = file_processing_timeout_seconds
@@ -86,9 +88,17 @@ class GeminiSemanticProvider:
         self.make_copy = copy_enabled()
         self.gemini_input: dict[str, Any] | None = None
 
-    def _upload_video(self, path: Path) -> Any:
-        """Upload a large video and wait until Gemini has processed it."""
-        uploaded_file = self._client.files.upload(file=str(path))
+    def _all_clients(self) -> list[Any]:
+        return list(getattr(self, "_clients", None) or [self._client])
+
+    def _upload_video(self, path: Path, client: Any = None) -> Any:
+        """Upload a large video and wait until Gemini has processed it.
+
+        Uploaded files belong to the key's project, so each key that is used
+        needs its own upload.
+        """
+        client = client or self._client
+        uploaded_file = client.files.upload(file=str(path))
         import time
 
         deadline = time.monotonic() + self.file_processing_timeout_seconds
@@ -115,7 +125,7 @@ class GeminiSemanticProvider:
                 raise RuntimeError(
                     "Gemini Files API upload response did not include a file name."
                 )
-            uploaded_file = self._client.files.get(name=file_name)
+            uploaded_file = client.files.get(name=file_name)
 
     def analyze(
         self,
@@ -138,25 +148,35 @@ class GeminiSemanticProvider:
         file_size = upload_path.stat().st_size
         mime_type = mimetypes.guess_type(upload_path.name)[0] or "video/mp4"
 
+        clients = self._all_clients()
+        inline_input: dict[str, Any] | None = None
         if file_size <= MAX_INLINE_VIDEO_BYTES:
-            video_bytes = upload_path.read_bytes()
-            video_input = {
+            # Inline bytes work on every key.
+            inline_input = {
                 "type": "video",
-                "data": base64.b64encode(video_bytes).decode("utf-8"),
+                "data": base64.b64encode(upload_path.read_bytes()).decode("utf-8"),
                 "mime_type": mime_type,
             }
-        else:
-            uploaded_file = self._upload_video(upload_path)
-            file_uri = getattr(uploaded_file, "uri", None)
-            if not file_uri:
-                raise RuntimeError(
-                    "Gemini Files API upload did not return a file URI."
-                )
-            video_input = {
-                "type": "video",
-                "uri": file_uri,
-                "mime_type": getattr(uploaded_file, "mime_type", None) or mime_type,
-            }
+        uploaded_inputs: dict[int, dict[str, Any]] = {}
+
+        def video_input_for(key: int) -> dict[str, Any]:
+            if inline_input is not None:
+                return inline_input
+            # A Files API upload belongs to its key's project: upload once
+            # per key actually used, and reuse it across models on that key.
+            if key not in uploaded_inputs:
+                uploaded_file = self._upload_video(upload_path, clients[key])
+                file_uri = getattr(uploaded_file, "uri", None)
+                if not file_uri:
+                    raise RuntimeError(
+                        "Gemini Files API upload did not return a file URI."
+                    )
+                uploaded_inputs[key] = {
+                    "type": "video",
+                    "uri": file_uri,
+                    "mime_type": getattr(uploaded_file, "mime_type", None) or mime_type,
+                }
+            return uploaded_inputs[key]
 
         prompt = build_semantic_prompt(duration_seconds, evidence)
         schema = _gemini_response_schema()
@@ -171,12 +191,12 @@ class GeminiSemanticProvider:
                 },
             }
 
-        def call(model: str) -> Any:
+        def call(model: str, key: int) -> Any:
             return run_background_interaction(
-                self._client,
+                clients[key],
                 model=model,
                 input_items=[
-                    video_input,
+                    video_input_for(key),
                     {"type": "text", "text": prompt},
                 ],
                 system_instruction=SYSTEM_INSTRUCTION,
@@ -194,18 +214,19 @@ class GeminiSemanticProvider:
             payload["duration_seconds"] = duration_seconds
             return SemanticAnalysis.model_validate(payload)
 
-        # The upload above happens once; every model in the chain reads the
-        # same uploaded file or inline bytes. Each attempt is validated, so an
-        # answer that fails validation moves up to the next model.
-        semantic, self.model_used = run_with_model_fallback(
+        # Each model is tried on key 1, 2, ... (next key only on a quota
+        # error); each attempt is validated, so an invalid answer moves on to
+        # the next model.
+        semantic, self.model_used, self.key_used = run_with_key_and_model_fallback(
             model_chain(self.model, "VIDEO_ANALYSIS_SEMANTIC_MODELS", DEFAULT_SEMANTIC_MODELS),
-            lambda model: call_and_validate(
+            lambda model, key: call_and_validate(
                 model,
-                call=call,
+                call=lambda m: call(m, key),
                 artifact_name="semantic",
                 raw_env_var="VIDEO_ANALYSIS_GEMINI_RAW_RESPONSE",
                 raw_default_name=DEFAULT_RAW_RESPONSE_LOG,
                 validator=validate,
             ),
+            key_count=len(clients),
         )
         return semantic

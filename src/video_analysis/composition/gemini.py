@@ -7,10 +7,10 @@ from pathlib import Path
 from ..gemini import (
     DEFAULT_COMPOSITION_MODELS,
     call_and_validate,
-    create_client,
+    create_clients,
     model_chain,
     run_background_interaction,
-    run_with_model_fallback,
+    run_with_key_and_model_fallback,
     sanitize_response_schema,
 )
 from .models import CompositionPlan
@@ -37,7 +37,9 @@ class GeminiCompositionProvider:
         poll_interval_seconds: float = DEFAULT_POLL_INTERVAL_SECONDS,
         processing_timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     ) -> None:
-        self._client = create_client()
+        # One client per key (GEMINI_API_KEY_1..n, else GEMINI_API_KEY).
+        self._clients = create_clients()
+        self._client = self._clients[0]
         self.model = model
         self.poll_interval_seconds = poll_interval_seconds
         self.processing_timeout_seconds = processing_timeout_seconds
@@ -57,9 +59,11 @@ class GeminiCompositionProvider:
         timeline = load_voice_timeline(voice_timeline) if voice_timeline is not None else None
         voice_summary = summarize_voice_timeline(timeline, float(duration)) if timeline else None
         prompt = build_composition_prompt(payload, voice_summary)
-        def call(model: str):
+        clients = list(getattr(self, "_clients", None) or [self._client])
+
+        def call(model: str, key: int):
             return run_background_interaction(
-                self._client,
+                clients[key],
                 model=model,
                 input_items=[{"type": "text", "text": prompt}],
                 system_instruction=SYSTEM_INSTRUCTION,
@@ -73,18 +77,20 @@ class GeminiCompositionProvider:
             result["duration_seconds"] = float(duration)
             return CompositionPlan.model_validate(result)
 
-        # Each attempt is validated, so an answer that fails validation moves
-        # up to the next model in the chain.
-        plan, self.model_used = run_with_model_fallback(
+        # Each model is tried on key 1, 2, ... (next key only on a quota
+        # error); each attempt is validated, so an invalid answer moves on to
+        # the next model.
+        plan, self.model_used, self.key_used = run_with_key_and_model_fallback(
             model_chain(self.model, "VIDEO_ANALYSIS_COMPOSITION_MODELS", DEFAULT_COMPOSITION_MODELS),
-            lambda model: call_and_validate(
+            lambda model, key: call_and_validate(
                 model,
-                call=call,
+                call=lambda m: call(m, key),
                 artifact_name="composition",
                 raw_env_var="VIDEO_ANALYSIS_COMPOSITION_RAW_RESPONSE",
                 raw_default_name=DEFAULT_RAW_RESPONSE_LOG,
                 validator=validate,
             ),
+            key_count=len(clients),
         )
         if timeline is not None:
             apply_narration_bed(plan, timeline)
