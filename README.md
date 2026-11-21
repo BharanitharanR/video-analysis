@@ -63,6 +63,24 @@ video-analysis analyze IMG_0771.mov --semantic gemini --gemini-model gemini-4-hy
 
 Without `--semantic`, the CLI remains deterministic-only.
 
+## What Gemini is sent: a deterministic 720p copy
+
+Before the semantic call, the original video is copied with fixed FFmpeg
+settings (`src/video_analysis/gemini_input.py`): the shorter side down to 720
+pixels (never upscaled, orientation kept), H.264 CRF 28 preset medium, AAC 96k
+mono 48 kHz, frame rate unchanged, all metadata stripped with the bitexact
+flags. Gemini receives `<name>.gemini-input.mp4`; the original is never
+modified, and the deterministic measurements still use the original.
+
+The same input and the same FFmpeg build give a byte-identical copy. The
+duration must match the original within 0.25 s, so Gemini's timestamps apply
+to the original timeline. `analysis.json` records what was sent under
+`video.gemini_input`: file name, size, SHA-256 of the copy and of the original,
+FFmpeg version and settings. A 173 s, 100 MB 1080p clip became a 5 MB copy in
+about 10 s on this Mac.
+
+`VIDEO_ANALYSIS_GEMINI_COPY=0` sends the original instead.
+
 ## Large video transport
 
 Gemini video input uses two transports automatically:
@@ -216,8 +234,10 @@ speech and 0.60 for the others. The SongSpec gets `extra.narration_bed: true` an
 
 ## Model fallback
 
-Both Gemini steps (`analyze --semantic gemini` and `compose`) try the requested
-`--gemini-model` first and, if Gemini answers with a quota, rate-limit or server
+Both Gemini steps (`analyze --semantic gemini` and `compose`) start small and go
+big: the cheapest model with the most free quota goes first. `--gemini-model` has
+no default; pass it only to force a specific model to the front. If Gemini
+answers with a quota, rate-limit or server
 error (`429`, `RESOURCE_EXHAUSTED`, `INTERNAL`, `UNAVAILABLE`, ...), move to the
 next model in a chain of free-tier models. Bad input, a response that fails
 validation, and timeouts are not retried. The model that answered is printed to
@@ -228,9 +248,10 @@ stderr as `Gemini model used: <model>`.
 | `VIDEO_ANALYSIS_SEMANTIC_MODELS` | comma-separated fallbacks for video analysis |
 | `VIDEO_ANALYSIS_COMPOSITION_MODELS` | comma-separated fallbacks for composition |
 | `VIDEO_ANALYSIS_MAX_MODEL_ATTEMPTS` | most models tried per step (default 3; each try is a paid call) |
-| `VIDEO_ANALYSIS_MODEL_FALLBACK=0` | use only the requested model |
+| `VIDEO_ANALYSIS_MODEL_FALLBACK=0` | use only the requested model, or the first of the chain |
 
-Default chains (free-tier models with quota, 2026-11-20):
+Default chains, cheapest first (free-tier quota per the AI Studio rate-limit
+page, 2026-11-20). With the default cap of 3, only the first three are tried:
 
-- analysis: gemini-4-hydrogen, gemini-3.8-flash, gemini-3.6-flash, gemini-2.5-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite
-- composition: gemini-3.6-flash, gemini-3.8-flash, gemini-4-hydrogen, gemini-2.5-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite, gemini-2.5-flash-lite
+- analysis: gemini-3.5-flash-lite, gemini-2.5-flash, gemini-3.8-flash, gemini-3.6-flash, gemini-4-hydrogen, gemini-3.1-flash-lite
+- composition: gemini-3.5-flash-lite, gemini-2.5-flash, gemini-3.6-flash, gemini-3.8-flash, gemini-4-hydrogen, gemini-3.1-flash-lite, gemini-2.5-flash-lite

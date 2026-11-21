@@ -70,4 +70,11 @@ class VideoAnalysisPipeline:
 
         # The merge function validates the semantic contract and creates a new
         # document. The original deterministic report remains unchanged.
-        return merge_semantic_analysis(deterministic, semantic)
+        merged = merge_semantic_analysis(deterministic, semantic)
+
+        # Record exactly what Gemini was sent (the deterministic copy, with its
+        # FFmpeg version, settings and hashes), so a run can be reproduced.
+        gemini_input = getattr(self.semantic_provider, "gemini_input", None)
+        if gemini_input:
+            merged["video"]["gemini_input"] = gemini_input
+        return merged

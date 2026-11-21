@@ -18,7 +18,7 @@ from .models import CompositionPlan
 from .voice import apply_narration_bed, load_voice_timeline, summarize_voice_timeline
 from .prompt import SYSTEM_INSTRUCTION, build_composition_prompt
 
-DEFAULT_MODEL = "gemini-3.6-flash"
+DEFAULT_MODEL = None  # the ordered chain in ..gemini decides
 DEFAULT_POLL_INTERVAL_SECONDS = 2.0
 DEFAULT_TIMEOUT_SECONDS = 300.0
 DEFAULT_RAW_RESPONSE_LOG = "composition-response.raw.json"
@@ -33,7 +33,7 @@ class GeminiCompositionProvider:
 
     def __init__(
         self,
-        model: str = DEFAULT_MODEL,
+        model: str | None = DEFAULT_MODEL,
         *,
         poll_interval_seconds: float = DEFAULT_POLL_INTERVAL_SECONDS,
         processing_timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,

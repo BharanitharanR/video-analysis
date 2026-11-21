@@ -11,24 +11,27 @@ from typing import Any, Callable, Iterable, TypeVar
 
 T = TypeVar("T")
 
-# Fallback order when the requested model is rate limited or failing.
-# Only models the free tier actually grants quota to (AI Studio rate-limit
-# page, 2026-11-20). The Flash-Lite models come last: weaker, but they carry
-# 15 RPM / 500 RPD where the others carry 5 RPM / 20 RPD.
+# Model order: start small, go big. The cheapest models with the most free
+# quota go first; larger models are tried only when a smaller one fails with
+# a quota, rate-limit or server error. Free-tier quota per the AI Studio
+# rate-limit page (2026-11-20): Flash-Lite models 15 RPM / 500 RPD, the
+# others 5 RPM / 20 RPD. gemini-4-hydrogen has the least headroom, so it is
+# last. With the default cap of 3 attempts only the first three are tried;
+# raise VIDEO_ANALYSIS_MAX_MODEL_ATTEMPTS to reach further.
 DEFAULT_SEMANTIC_MODELS = (
-    "gemini-4-hydrogen",
+    "gemini-3.5-flash-lite",
+    "gemini-2.5-flash",
     "gemini-3.8-flash",
     "gemini-3.6-flash",
-    "gemini-2.5-flash",
-    "gemini-3.5-flash-lite",
+    "gemini-4-hydrogen",
     "gemini-3.1-flash-lite",
 )
 DEFAULT_COMPOSITION_MODELS = (
+    "gemini-3.5-flash-lite",
+    "gemini-2.5-flash",
     "gemini-3.6-flash",
     "gemini-3.8-flash",
     "gemini-4-hydrogen",
-    "gemini-2.5-flash",
-    "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
     "gemini-2.5-flash-lite",
 )
@@ -56,8 +59,11 @@ def is_retryable_model_error(exc: BaseException) -> bool:
     )
 
 
-def model_chain(primary: str, env_var: str, defaults: Iterable[str]) -> list[str]:
-    """The requested model first, then the fallbacks, without repeats.
+def model_chain(primary: str | None, env_var: str, defaults: Iterable[str]) -> list[str]:
+    """The requested model (if any) first, then the fallbacks, without repeats.
+
+    `primary` is None unless the caller asked for a specific model; the
+    command line no longer defaults to one, so the ordered chain decides.
 
     The fallbacks come from `env_var` (comma-separated) when set, else
     `defaults`. VIDEO_ANALYSIS_MODEL_FALLBACK=0 turns fallback off.
@@ -66,8 +72,12 @@ def model_chain(primary: str, env_var: str, defaults: Iterable[str]) -> list[str
     when the input itself is what makes Gemini fail, every model fails, and
     each attempt is a paid call.
     """
+    configured_chain = os.environ.get(env_var)
     if os.environ.get("VIDEO_ANALYSIS_MODEL_FALLBACK", "1").strip() == "0":
-        return [primary]
+        if primary:
+            return [primary]
+        first = configured_chain.split(",")[0].strip() if configured_chain else None
+        return [first or next(iter(defaults))]
     configured = os.environ.get(env_var)
     rest = [m.strip() for m in configured.split(",")] if configured else list(defaults)
     chain: list[str] = []

@@ -17,6 +17,7 @@ from ..gemini import (
     run_with_model_fallback,
     sanitize_response_schema,
 )
+from ..gemini_input import copy_enabled, make_gemini_copy
 from .models import SemanticAnalysis
 from .prompt import SYSTEM_INSTRUCTION, build_semantic_prompt
 
@@ -66,7 +67,7 @@ class GeminiSemanticProvider:
 
     def __init__(
         self,
-        model: str = "gemini-4-hydrogen",
+        model: str | None = None,
         *,
         file_poll_interval_seconds: float = DEFAULT_FILE_POLL_INTERVAL_SECONDS,
         file_processing_timeout_seconds: float = DEFAULT_FILE_PROCESSING_TIMEOUT_SECONDS,
@@ -81,6 +82,10 @@ class GeminiSemanticProvider:
         self.interaction_poll_interval_seconds = interaction_poll_interval_seconds
         self.interaction_processing_timeout_seconds = interaction_processing_timeout_seconds
         self.webhook_url = webhook_url or os.environ.get("VIDEO_ANALYSIS_GEMINI_WEBHOOK_URL")
+        # Send Gemini a deterministic 720p copy, never the original file
+        # (see ..gemini_input). VIDEO_ANALYSIS_GEMINI_COPY=0 turns it off.
+        self.make_copy = copy_enabled()
+        self.gemini_input: dict[str, Any] | None = None
 
     def _upload_video(self, path: Path) -> Any:
         """Upload a large video and wait until Gemini has processed it."""
@@ -123,18 +128,26 @@ class GeminiSemanticProvider:
         if not path.is_file():
             raise FileNotFoundError(path)
 
-        file_size = path.stat().st_size
-        mime_type = mimetypes.guess_type(path.name)[0] or "video/mp4"
+        # What Gemini receives: the deterministic copy when enabled (the
+        # original stays untouched), otherwise the original.
+        upload_path = path
+        self.gemini_input = None
+        if getattr(self, "make_copy", False):
+            self.gemini_input = make_gemini_copy(path)
+            upload_path = path.with_name(self.gemini_input["path"])
+
+        file_size = upload_path.stat().st_size
+        mime_type = mimetypes.guess_type(upload_path.name)[0] or "video/mp4"
 
         if file_size <= MAX_INLINE_VIDEO_BYTES:
-            video_bytes = path.read_bytes()
+            video_bytes = upload_path.read_bytes()
             video_input = {
                 "type": "video",
                 "data": base64.b64encode(video_bytes).decode("utf-8"),
                 "mime_type": mime_type,
             }
         else:
-            uploaded_file = self._upload_video(path)
+            uploaded_file = self._upload_video(upload_path)
             file_uri = getattr(uploaded_file, "uri", None)
             if not file_uri:
                 raise RuntimeError(

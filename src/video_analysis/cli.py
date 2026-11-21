@@ -22,8 +22,8 @@ def main():
     a.add_argument("--interval", type=float, default=1.0)
     a.add_argument("--semantic", choices=["none", "gemini"], default="none",
                    help="Enable semantic AI analysis")
-    a.add_argument("--gemini-model", default="gemini-4-hydrogen",
-                   help="Gemini model used when --semantic=gemini")
+    a.add_argument("--gemini-model", default=None,
+                   help="Force this Gemini model first (default: the ordered chain, cheapest first)")
 
     m = sub.add_parser(
         "merge",
@@ -39,8 +39,8 @@ def main():
     )
     c.add_argument("analysis", help="Completed analysis.json")
     c.add_argument("-o", "--output", default="song-spec.json")
-    c.add_argument("--gemini-model", default="gemini-3.6-flash",
-                   help="Gemini model used for composition planning")
+    c.add_argument("--gemini-model", default=None,
+                   help="Force this Gemini model first (default: the ordered chain, cheapest first)")
 
     c.add_argument("--voice-timeline", default=None,
                    help="voiceover-timeline.json; plans a sparse bed under narration")
