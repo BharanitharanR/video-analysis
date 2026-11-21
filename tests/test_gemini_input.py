@@ -191,33 +191,33 @@ def test_pipeline_records_what_gemini_was_sent(tmp_path):
     assert record["source_sha256"] == gemini_input.sha256_of(source)
 
 
-# Model order: strongest first; keys get past quota (see test_multi_key.py).
+# Built-in order: gemini-3.8-flash is the baseline (see test_model_config.py for the config file).
 
-def test_semantic_chain_starts_with_the_strongest_model(monkeypatch):
+def test_semantic_chain_starts_with_the_baseline_model(monkeypatch):
     monkeypatch.delenv("VIDEO_ANALYSIS_SEMANTIC_MODELS", raising=False)
     monkeypatch.delenv("VIDEO_ANALYSIS_MAX_MODEL_ATTEMPTS", raising=False)
     assert model_chain(None, "VIDEO_ANALYSIS_SEMANTIC_MODELS", DEFAULT_SEMANTIC_MODELS)[:3] == [
-        "gemini-4-hydrogen", "gemini-3.8-flash", "gemini-3.6-flash"]
+        "gemini-3.8-flash", "gemini-3.6-flash", "gemini-2.5-flash"]
     assert DEFAULT_SEMANTIC_MODELS[-1].endswith("flash-lite")
 
 
-def test_composition_chain_starts_with_the_strongest_model(monkeypatch):
+def test_composition_chain_starts_with_the_baseline_model(monkeypatch):
     monkeypatch.delenv("VIDEO_ANALYSIS_COMPOSITION_MODELS", raising=False)
     monkeypatch.delenv("VIDEO_ANALYSIS_MAX_MODEL_ATTEMPTS", raising=False)
     assert model_chain(None, "VIDEO_ANALYSIS_COMPOSITION_MODELS", DEFAULT_COMPOSITION_MODELS)[0] == \
-        "gemini-4-hydrogen"
+        "gemini-3.8-flash"
 
 
 def test_chain_is_cut_at_the_attempt_cap(monkeypatch):
     monkeypatch.setenv("VIDEO_ANALYSIS_MAX_MODEL_ATTEMPTS", "2")
     assert model_chain(None, "VIDEO_ANALYSIS_SEMANTIC_MODELS", DEFAULT_SEMANTIC_MODELS) == [
-        "gemini-4-hydrogen", "gemini-3.8-flash"]
+        "gemini-3.8-flash", "gemini-3.6-flash"]
 
 
 def test_fallback_off_without_primary_uses_first_of_chain(monkeypatch):
     monkeypatch.setenv("VIDEO_ANALYSIS_MODEL_FALLBACK", "0")
     assert model_chain(None, "VIDEO_ANALYSIS_SEMANTIC_MODELS", DEFAULT_SEMANTIC_MODELS) == [
-        "gemini-4-hydrogen"]
+        "gemini-3.8-flash"]
 
 
 def test_cli_no_longer_forces_a_model(monkeypatch):

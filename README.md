@@ -232,12 +232,54 @@ sets `narration_bed: true` and caps section energy at 0.45 for sections that ove
 speech and 0.60 for the others. The SongSpec gets `extra.narration_bed: true` and a
 `narration-bed` tag. Without `--voice-timeline` nothing changes.
 
-## Model fallback and multiple API keys
+## Model order: a config file, not code
 
-Both Gemini steps (`analyze --semantic gemini` and `compose`) start with the
-strongest model and use several API keys to get past its small free quota.
-`--gemini-model` has no default; pass it only to force a specific model to the
-front.
+The order Gemini models are tried in is set in one config file, shared by the
+Video Score Studio **Models** window, this command line and the MCP wrapper.
+The order of each list is the order of tries:
+
+```json
+{
+  "analysis":    ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-2.5-flash", "gemini-4-hydrogen", "gemini-3.5-flash-lite"],
+  "composition": ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-2.5-flash", "gemini-4-hydrogen", "gemini-3.5-flash-lite"],
+  "disabled":    {"analysis": [], "composition": []},
+  "max_attempts": 6
+}
+```
+
+- Location: `~/.config/video-score/gemini-models.json`, or the path in
+  `VIDEO_ANALYSIS_MODELS_CONFIG`. It is outside the repos, so pulls never
+  overwrite it and it is never committed.
+- `analysis` is the video analysis step, `composition` the music plan.
+- `disabled` keeps models switched off in the studio window; they are never
+  tried. Every field is optional; a missing list uses the built-in default.
+- It is read fresh at the start of every Gemini step, so an edit applies to the
+  next run without a restart.
+- A broken file (not JSON, a bad model name, every model switched off, a cap
+  outside 1 to 50) stops the step before any Gemini call, with the reason.
+
+Without the studio:
+
+```bash
+video-analysis models                  # the order each step will use, and where it comes from
+video-analysis models --write-defaults # create the file with the built-in order (never overwrites)
+video-analysis models --json           # the same report as JSON
+echo '{"analysis": ["gemini-3.6-flash", "gemini-3.8-flash"]}' | video-analysis models --save -
+```
+
+Which setting wins, per step: `--gemini-model` (moved to the front), then
+`VIDEO_ANALYSIS_SEMANTIC_MODELS` / `VIDEO_ANALYSIS_COMPOSITION_MODELS`, then
+the config file, then the built-in defaults. Every run prints the order it
+uses, for example
+`Gemini model order for Video analysis (config file ...): gemini-3.8-flash, ...`.
+
+Built-in defaults (when nothing else sets an order), with `gemini-3.8-flash`
+as the baseline:
+
+- analysis: gemini-3.8-flash, gemini-3.6-flash, gemini-2.5-flash, gemini-4-hydrogen, gemini-3.5-flash-lite, gemini-3.1-flash-lite
+- composition: gemini-3.8-flash, gemini-3.6-flash, gemini-2.5-flash, gemini-4-hydrogen, gemini-3.5-flash-lite, gemini-3.1-flash-lite, gemini-2.5-flash-lite
+
+## Fallback across models and API keys
 
 Keys come from `GEMINI_API_KEY_1`, `GEMINI_API_KEY_2`, ... in that order
 (repeats are ignored); when none is set, `GEMINI_API_KEY` alone. Each key gets
@@ -256,12 +298,10 @@ The order of attempts:
    `UNAVAILABLE`, `DEADLINE_EXCEEDED`, or an answer that is empty, not JSON,
    or fails local validation), the **next model** is tried, starting again
    from key 1.
-4. At most `VIDEO_ANALYSIS_MAX_MODEL_ATTEMPTS` attempts (default **6**) are
-   made in all, across models and keys. Every attempt may be a paid call.
+4. At most `max_attempts` attempts (default **6**) are made in all, across
+   models and keys. Every attempt may be a paid call.
 
-Bad input and our own wait running out (`TimeoutError`) stop the step at
-once. With five keys the default cap of 6 means: the strongest model on up to
-five keys, then the second model on key 1.
+Bad input and our own wait running out (`TimeoutError`) stop the step at once.
 
 Large videos sent through the Files API are uploaded once per key actually
 used, since an upload belongs to its key's project. Inline videos (up to
@@ -270,9 +310,9 @@ used, since an upload belongs to its key's project. Inline videos (up to
 Logs name keys by number, never by value:
 
 ```
-Gemini model gemini-4-hydrogen (key 1/5) out of quota (...); trying key 2/5
-Gemini model gemini-4-hydrogen (key 5/5) is out of quota on every key (...); trying gemini-3.8-flash from key 1
-Gemini model used: gemini-3.8-flash (key 1/5)
+Gemini model gemini-3.8-flash (key 1/4) out of quota (...); trying key 2/4
+Gemini model gemini-3.8-flash (key 4/4) is out of quota on every key (...); trying gemini-3.6-flash from key 1
+Gemini model used: gemini-3.6-flash (key 1/4)
 ```
 
 A rejected answer is logged as `... gave an invalid answer (...)` and kept
@@ -280,14 +320,10 @@ beside the raw response as `<raw>.<model>.rejected.json`.
 
 | Variable | Effect |
 |---|---|
+| `VIDEO_ANALYSIS_MODELS_CONFIG` | path of the model config file |
 | `GEMINI_API_KEY_1` .. `GEMINI_API_KEY_<n>` | keys to rotate through, in order |
 | `GEMINI_API_KEY` | the single key, used when no numbered key is set |
-| `VIDEO_ANALYSIS_SEMANTIC_MODELS` | comma-separated model chain for video analysis |
-| `VIDEO_ANALYSIS_COMPOSITION_MODELS` | comma-separated model chain for composition |
-| `VIDEO_ANALYSIS_MAX_MODEL_ATTEMPTS` | most attempts per step across models and keys (default 6) |
-| `VIDEO_ANALYSIS_MODEL_FALLBACK=0` | use only the requested model, or the first of the chain |
-
-Default chains, strongest first:
-
-- analysis: gemini-4-hydrogen, gemini-3.8-flash, gemini-3.6-flash, gemini-2.5-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite
-- composition: gemini-4-hydrogen, gemini-3.8-flash, gemini-3.6-flash, gemini-2.5-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite, gemini-2.5-flash-lite
+| `VIDEO_ANALYSIS_SEMANTIC_MODELS` | comma-separated model order for video analysis (beats the file) |
+| `VIDEO_ANALYSIS_COMPOSITION_MODELS` | comma-separated model order for composition (beats the file) |
+| `VIDEO_ANALYSIS_MAX_MODEL_ATTEMPTS` | most attempts per step across models and keys (beats the file) |
+| `VIDEO_ANALYSIS_MODEL_FALLBACK=0` | use only the requested model, or the first of the order |

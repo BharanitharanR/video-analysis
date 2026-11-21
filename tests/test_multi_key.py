@@ -216,6 +216,7 @@ def provider_with(clients, tmp_path, monkeypatch):
 def test_provider_moves_to_the_next_key_on_quota(tmp_path, monkeypatch):
     clients = [FakeClient("k1", {"gemini-4-hydrogen": QUOTA}), FakeClient("k2"), FakeClient("k3")]
     provider, video = provider_with(clients, tmp_path, monkeypatch)
+    monkeypatch.setenv("VIDEO_ANALYSIS_SEMANTIC_MODELS", "gemini-4-hydrogen,gemini-3.8-flash")
 
     provider.analyze(video, duration_seconds=10)
 

@@ -9,35 +9,40 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Iterable, TypeVar
 
+from . import model_config
+
 T = TypeVar("T")
 
-# Model order: strongest first. Flash-Lite answers were too weak for demo
-# narration (2026-11-21), so the best model goes first and several API keys
-# (see api_keys) are used to get past its small free quota: a quota error
-# tries the same model on the next key; only when every key is out of quota,
-# or the model fails in a way another key cannot fix, does the chain step
-# down to the next model. Free-tier quota per the AI Studio rate-limit page
-# (2026-11-20): Flash-Lite 15 RPM / 500 RPD, the others 5 RPM / 20 RPD.
+# Built-in model order, used only when neither an environment variable nor
+# the model config file (see model_config) sets one. The order is set by the
+# user in the studio's Models window or in the config file; these are just
+# the defaults. gemini-3.8-flash is the baseline: Flash-Lite answers were too
+# weak for demo narration and gemini-4-hydrogen was very slow on a 173 s demo
+# (2026-11-21). Several API keys (see api_keys) get past each model's small
+# free quota: a quota error tries the same model on the next key; anything
+# else another key cannot fix steps down to the next model.
 DEFAULT_SEMANTIC_MODELS = (
-    "gemini-4-hydrogen",
     "gemini-3.8-flash",
     "gemini-3.6-flash",
     "gemini-2.5-flash",
+    "gemini-4-hydrogen",
     "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
 )
 DEFAULT_COMPOSITION_MODELS = (
-    "gemini-4-hydrogen",
     "gemini-3.8-flash",
     "gemini-3.6-flash",
     "gemini-2.5-flash",
+    "gemini-4-hydrogen",
     "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
     "gemini-2.5-flash-lite",
 )
+STEP_DEFAULTS = {"analysis": DEFAULT_SEMANTIC_MODELS, "composition": DEFAULT_COMPOSITION_MODELS}
 
 # Most Gemini attempts (model x key) per step, whatever the mix. Every
-# attempt may be a paid call. VIDEO_ANALYSIS_MAX_MODEL_ATTEMPTS overrides.
+# attempt may be a paid call. VIDEO_ANALYSIS_MAX_MODEL_ATTEMPTS or the
+# config file's "max_attempts" overrides.
 DEFAULT_MAX_ATTEMPTS = 6
 
 # Keys: GEMINI_API_KEY_1 .. GEMINI_API_KEY_<n>, tried in that order; when
@@ -64,7 +69,8 @@ def api_keys() -> list[str]:
 
 
 def max_attempts() -> int:
-    return max(1, int(os.environ.get("VIDEO_ANALYSIS_MAX_MODEL_ATTEMPTS", str(DEFAULT_MAX_ATTEMPTS))))
+    return model_config.max_attempts_setting(DEFAULT_MAX_ATTEMPTS)[0]
+
 
 class InvalidModelResponse(ValueError):
     """Gemini answered, but the answer is empty, not JSON, or fails our
@@ -126,27 +132,33 @@ def model_chain(primary: str | None, env_var: str, defaults: Iterable[str]) -> l
     `primary` is None unless the caller asked for a specific model; the
     command line no longer defaults to one, so the ordered chain decides.
 
-    The fallbacks come from `env_var` (comma-separated) when set, else
-    `defaults`. VIDEO_ANALYSIS_MODEL_FALLBACK=0 turns fallback off.
+    The fallbacks come from `env_var` (comma-separated) when set, else the
+    model config file (see model_config), else `defaults`.
+    VIDEO_ANALYSIS_MODEL_FALLBACK=0 turns fallback off.
 
-    The chain is cut at VIDEO_ANALYSIS_MAX_MODEL_ATTEMPTS (default 6), the
-    same cap that bounds total attempts across models and keys: when the
-    input itself is what makes Gemini fail, every model fails, and each
-    attempt may be a paid call.
+    The chain is cut at the attempt cap (default 6), the same cap that bounds
+    total attempts across models and keys: when the input itself is what
+    makes Gemini fail, every model fails, and each attempt may be a paid call.
     """
-    configured_chain = os.environ.get(env_var)
+    step = model_config.ENV_STEP.get(env_var)
+    if step:
+        rest, _source = model_config.step_models(step, list(defaults))
+    else:
+        configured = os.environ.get(env_var)
+        rest = [m.strip() for m in configured.split(",")] if configured else list(defaults)
     if os.environ.get("VIDEO_ANALYSIS_MODEL_FALLBACK", "1").strip() == "0":
         if primary:
             return [primary]
-        first = configured_chain.split(",")[0].strip() if configured_chain else None
-        return [first or next(iter(defaults))]
-    configured = os.environ.get(env_var)
-    rest = [m.strip() for m in configured.split(",")] if configured else list(defaults)
+        return [rest[0] if rest else next(iter(defaults))]
     chain: list[str] = []
     for model in [primary, *rest]:
         if model and model not in chain:
             chain.append(model)
-    return chain[:max_attempts()]
+    chain = chain[:max_attempts()]
+    if step:
+        where = "--gemini-model first, then " + _source if primary else _source
+        _stderr(f"Gemini model order for {model_config.STEP_LABEL[step]} ({where}): {', '.join(chain)}")
+    return chain
 
 
 def _stderr(message: str) -> None:
